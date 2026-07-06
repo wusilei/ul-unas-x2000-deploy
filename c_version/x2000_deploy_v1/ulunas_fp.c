@@ -806,11 +806,12 @@ void cTFA_ta_module(const int32_t *x, int C, int W,
 
     /* FC: (nHidden,) → (C,) per output channel
      * MATLAB: x_fc = round(gru * fc_w * 2^(fc_shift)) + fc_b
-     * gru (1, nHidden) × fc_w (nHidden, C) = (1, C) */
+     * gru (1, nHidden) × fc_w (nHidden, C) = (1, C)
+     * MATLAB col-major: fc_w(h, c) = fc_w[h + hidden_dim * c] */
     for (int c = 0; c < C; c++) {
         int64_t acc = fc_b[c];
         for (int h = 0; h < hidden_dim; h++) {
-            acc += (int64_t)gru_out[h] * (int64_t)fc_w[h * C + c];
+            acc += (int64_t)gru_out[h] * (int64_t)fc_w[h + hidden_dim * c];
         }
         int shift = -fc_shift;
         int32_t fc_val = sat32((acc + ((int64_t)1 << (shift - 1))) >> shift);

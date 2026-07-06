@@ -84,7 +84,7 @@ static const ctfa_module_t enc_modules[] = {
      encoder_en_convs_1_pconv2_2_fa_fc_weight, encoder_en_convs_1_pconv2_2_fa_fc_bias,
      -13, -8, -8,  -13, -8, -9},
 
-    {"enc_e2", 24, 33, CTA_XDWS0_HID,
+    {"enc_e2", 24, 33, CTA_XMB0_HID,
      encoder_en_convs_2_dconv_4_ta_gru_weight_ih_l0, encoder_en_convs_2_dconv_4_ta_gru_bias_ih_l0,
      encoder_en_convs_2_dconv_4_ta_gru_weight_hh_l0, encoder_en_convs_2_dconv_4_ta_gru_bias_hh_l0,
      encoder_en_convs_2_dconv_4_ta_fc_weight, encoder_en_convs_2_dconv_4_ta_fc_bias,
@@ -141,7 +141,7 @@ static const ctfa_module_t dec_modules[] = {
      decoder_de_convs_1_pconv2_2_fa_fc_weight, decoder_de_convs_1_pconv2_2_fa_fc_bias,
      -13, -8, -9,  -12, -7, -9},
 
-    {"dec_d2", 24, 33, CH_DEC_XDWS1,
+    {"dec_d2", 24, 33, CH_DEC_XMB0,
      decoder_de_convs_2_dconv_4_ta_gru_weight_ih_l0, decoder_de_convs_2_dconv_4_ta_gru_bias_ih_l0,
      decoder_de_convs_2_dconv_4_ta_gru_weight_hh_l0, decoder_de_convs_2_dconv_4_ta_gru_bias_hh_l0,
      decoder_de_convs_2_dconv_4_ta_fc_weight, decoder_de_convs_2_dconv_4_ta_fc_bias,

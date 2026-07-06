@@ -859,7 +859,7 @@ void cTFA_fa_module(const int32_t *x, int C, int W,
     int32_t x_reshaped[CTA_FA_SEG * 4];
     for (int s = 0; s < seg_len; s++)
         for (int d = 0; d < 4; d++)
-            x_reshaped[s * 4 + d] = x_seg[d * seg_len + s];
+            x_reshaped[s * 4 + d] = x_seg[d + 4 * s];  /* col-major: x_pad[d + 4*s] */
 
     /* BiGRU: (seg_len, 4) → (seg_len, 8) s16f15 */
     int16_t gru_out[CTA_FA_SEG * 8];
@@ -869,14 +869,16 @@ void cTFA_fa_module(const int32_t *x, int C, int W,
                 gru_out, qr1, qr2);
 
     /* FC: (8,) → (4, seg_len) then reshape back
-     * MATLAB: x_fc = round(gru * fc_w * 2^(fc_shift)) + fc_b */
+     * MATLAB: x_fc = round(gru * fc_w * 2^(fc_shift)) + fc_b
+     * x_fc(s, out) uses bias[out] + weight[h,out]*x_gru(s,h) for ALL s.
+     * fc_out[d*seg_len+s] = x_fc(s, d) → uses fc_b[d], fc_w[d*8+h] */
     int shift = -fc_shift;
     int32_t fc_out[CTA_FA_SEG * 4];
-    for (int s = 0; s < seg_len; s++) {
-        for (int d = 0; d < 4; d++) {
-            int64_t acc = fc_b[s * 4 + d];
+    for (int d = 0; d < 4; d++) {
+        for (int s = 0; s < seg_len; s++) {
+            int64_t acc = fc_b[d];  /* per-output-dim, same for all s */
             for (int h = 0; h < 8; h++) {
-                acc += (int64_t)gru_out[s * 8 + h] * (int64_t)fc_w[(s * 4 + d) * 8 + h];
+                acc += (int64_t)gru_out[s * 8 + h] * (int64_t)fc_w[d * 8 + h];
             }
             fc_out[d * seg_len + s] = sat32((acc + ((int64_t)1 << (shift - 1))) >> shift);
         }

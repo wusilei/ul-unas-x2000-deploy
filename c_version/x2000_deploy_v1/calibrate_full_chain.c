@@ -50,10 +50,12 @@ static float *load_float(const char *p, int n) {
 }
 
 /* Run full chain: STFT → log_gen → BM → Encoder → DPRNN → Decoder → Sigmoid → BS → MASK
- * Returns MASK SNR (or decoder SNR if dec_only) */
+ * Returns MASK SNR (or decoder SNR if dec_only).
+ * dec_snr_floor: if use_mask_target and dec SNR drops below this, return -999 */
 static double run_full_chain(const float *real_in, const float *imag_in,
                               const int32_t *golden_mask, const int32_t *golden_dec,
-                              int use_mask_target, double *dec_snr_out) {
+                              int use_mask_target, double dec_snr_floor,
+                              double *dec_snr_out) {
     int32_t x_log[257]; log_gen_fixed(real_in, imag_in, 257, x_log);
     int32_t x_bm[129];  BM_fixed(x_log, erb_erb_fc_weight, x_bm);
 
@@ -72,6 +74,9 @@ static double run_full_chain(const float *real_in, const float *imag_in,
     if (dec_snr_out) *dec_snr_out = dec_snr;
 
     if (!use_mask_target) return dec_snr;
+
+    /* Reject candidates that collapse decoder beyond floor */
+    if (dec_snr < dec_snr_floor) return -999.0;
 
     /* Full MASK chain */
     uint16_t y_sig[1*N_BINS_BM];
@@ -99,8 +104,9 @@ static double run_full_chain(const float *real_in, const float *imag_in,
 static double search_ctfa_6d(ctfa_qr_t *qr, int has_state,
                               const float *ri, const float *ii,
                               const int32_t *gm, const int32_t *gd,
-                              int use_mask, double *base_out) {
-    double base = run_full_chain(ri, ii, gm, gd, use_mask, NULL);
+                              int use_mask, double dec_snr_floor,
+                              double *base_out) {
+    double base = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
     if (base_out) *base_out = base;
 
     double best = base;
@@ -114,7 +120,7 @@ static double search_ctfa_6d(ctfa_qr_t *qr, int has_state,
     for (int fa2 = -14; fa2 <= -2; fa2 += 2)
     for (int ffc = -12; ffc <= -2; ffc += 2) {
         *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, NULL);
+        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
         if (s > best) { best = s; best_qr = *qr; }
     }
 
@@ -126,7 +132,7 @@ static double search_ctfa_6d(ctfa_qr_t *qr, int has_state,
     for (int fa2 = best_qr.fa_qr2-1; fa2 <= best_qr.fa_qr2+1; fa2++)
     for (int ffc = best_qr.fa_fc-1; ffc <= best_qr.fa_fc+1; ffc++) {
         *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, NULL);
+        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
         if (s > best) { best = s; best_qr = *qr; }
     }
 
@@ -161,10 +167,14 @@ int main(int argc, char **argv) {
     if (!ri || !ii || !gd || !gm) { printf("ERROR: missing input files\n"); return 1; }
 
     /* Baseline: measure current dec + mask SNR with full chain */
-    double dec_snr;
-    double base_snr = run_full_chain(ri, ii, gm, gd, use_mask, &dec_snr);
+    double dec_snr_base;
+    double base_snr = run_full_chain(ri, ii, gm, gd, use_mask, -999.0, &dec_snr_base);
     printf("Baseline: %s=%.2f dB  dec=%.2f dB\n\n",
-           use_mask ? "mask" : "dec", base_snr, dec_snr);
+           use_mask ? "mask" : "dec", base_snr, dec_snr_base);
+
+    /* MASK-targeted: allow up to 3 dB decoder degradation */
+    double dec_snr_floor = use_mask ? dec_snr_base - 3.0 : -999.0;
+    if (use_mask) printf("Decoder SNR floor: %.2f dB\n\n", dec_snr_floor);
 
     /* ================================================================
      * Decoder cTFA calibration (backward: d4→d0)
@@ -177,9 +187,10 @@ int main(int argc, char **argv) {
 
         for (int m = 0; m < 5; m++) {
             double base;
-            double best = search_ctfa_6d(dec_qrs[m], 1, ri, ii, gm, gd, use_mask, &base);
+            double best = search_ctfa_6d(dec_qrs[m], 1, ri, ii, gm, gd,
+                                         use_mask, dec_snr_floor, &base);
             double d;
-            run_full_chain(ri, ii, gm, gd, use_mask, &d);
+            run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &d);
             print_qr_macro(dec_names[m], dec_qrs[m], best, base, d);
         }
     }
@@ -203,7 +214,7 @@ int main(int argc, char **argv) {
             g_d4_tconv.conv_qr = tconv_cq[ic];
             g_d4_tconv.bn_qr1  = tconv_b1[ib1];
             g_d4_tconv.bn_qr2  = tconv_b2[ib2];
-            double s = run_full_chain(ri, ii, gm, gd, use_mask, NULL);
+            double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
             if (s > best_tc) {
                 best_tc = s;
                 best_cq = tconv_cq[ic]; best_b1 = tconv_b1[ib1]; best_b2 = tconv_b2[ib2];
@@ -212,7 +223,7 @@ int main(int argc, char **argv) {
 
         g_d4_tconv.conv_qr = best_cq; g_d4_tconv.bn_qr1 = best_b1; g_d4_tconv.bn_qr2 = best_b2;
         double d;
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, &d);
+        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &d);
         printf("Best d4 TConv: conv=%d bn=(%d,%d)  %s=%.2f dB  dec=%.2f\n\n",
                best_cq, best_b1, best_b2, use_mask ? "mask" : "dec", s, d);
     }
@@ -235,7 +246,7 @@ int main(int argc, char **argv) {
     printf("#define D4_TCONV_BN1 %d\n", g_d4_tconv.bn_qr1);
     printf("#define D4_TCONV_BN2 %d\n", g_d4_tconv.bn_qr2);
 
-    double final_snr = run_full_chain(ri, ii, gm, gd, use_mask, &dec_snr);
+    double final_snr = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &dec_snr);
     printf("\nFinal: %s=%.2f dB  dec=%.2f dB\n",
            use_mask ? "mask" : "dec", final_snr, dec_snr);
 

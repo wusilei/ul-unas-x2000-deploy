@@ -668,7 +668,7 @@ void De_XConv_module(const int32_t *x, const int32_t *x_skip,
     int stride_w = 2, pad_w = 1;
     int W_insert = Win_d4 + (Win_d4 - 1) * (stride_w - 1);  /* 65 + 64 = 129 */
     int W_padded = W_insert + 2 * pad_w;                      /* 129 + 2 = 131 */
-    int conv_qr_d4 = -14;  /* TODO: calibrate — -17 too aggressive, -14 gave 5.66dB */
+    int conv_qr_d4 = -14;  /* reverting: -17+TConv golden overfit, -14+chain cTFA calib = 7.39dB */
 
     int32_t y_tconv[1*129];
     for (int co = 0; co < Cout_d4; co++) {
@@ -710,7 +710,7 @@ void De_XConv_module(const int32_t *x, const int32_t *x_skip,
         memmove(conv_cache+(h*12+c)*65, conv_cache+((h+1)*12+c)*65, 65*sizeof(int32_t));
     for(int c=0;c<12;c++)memcpy(conv_cache+(1*12+c)*65, x_cat+c*65, 65*sizeof(int32_t));
 
-    /* BN: TODO calibrate — original values work best so far */
+    /* BN: reverting to chain-compatible qr -11,-11 (7.39dB dec SNR) */
     bn_fixed(y_tconv, Cout_d4, 129,
              decoder_de_convs_4_ops_2_weight, decoder_de_convs_4_ops_2_bias,
              decoder_de_convs_4_ops_2_running_mean, decoder_de_convs_4_ops_2_running_var,

@@ -388,10 +388,10 @@ int main() {
             memcpy(x_full + (2 * Cin + c) * Win, x_cat + c * Win, Win * sizeof(int32_t));
 
         double best = -999; int bc = -14, bb1 = -11, bb2 = -11;
-        /* Extended search ranges to cover aggressive quantization */
-        for (int cqr = -12; cqr >= -19; cqr--) {
-            for (int bqr1 = -9; bqr1 >= -18; bqr1--) {
-                for (int bqr2 = -9; bqr2 >= -18; bqr2--) {
+        /* Extended: conv_qr ∈ [-18,-10], bn_qr1 ∈ [-20,-8], bn_qr2 ∈ [-20,-8] */
+        for (int cqr = -10; cqr >= -18; cqr--) {
+            for (int bqr1 = -8; bqr1 >= -20; bqr1--) {
+                for (int bqr2 = -8; bqr2 >= -20; bqr2--) {
                     int32_t y_conv[Cout * Wout]; memset(y_conv, 0, sizeof(y_conv));
 
                     /* Hybrid conv(H) + tconv(W) — exact replica of De_XConv_module */

@@ -203,24 +203,17 @@ static void ctfa_block(const ctfa_module_t *m,
     cTFA_apply(x_in, ta_gate, fa_gate, m->C, m->W, y_out);
 }
 
-int main() {
-    printf("=== cTFA QR Calibration ===\n\n");
-
-    /* ================================================================
-     * Encoder calibration
-     * ================================================================ */
-    printf("--- ENCODER cTFA ---\n");
+static void calibrate_module_set(const ctfa_module_t *modules, int count, const char *label) {
+    printf("--- %s cTFA ---\n", label);
     printf("%-10s %4s %3s %3s %3s | %4s %3s %3s %3s | %8s %8s %8s\n",
            "Module", "ta1","ta2","tfc","fa1","fa2","ffc","ta_SNR","fa_SNR","out_SNR");
 
-    for (int mi = 0; mi < 5; mi++) {
-        const ctfa_module_t *m = &enc_modules[mi];
+    for (int mi = 0; mi < count; mi++) {
+        const ctfa_module_t *m = &modules[mi];
         int total = m->C * m->W;
 
-        /* Load golden files */
         int32_t *g_in = calloc(total, sizeof(int32_t));
         uint16_t *g_ta = calloc(m->C, sizeof(uint16_t));
-        /* fa golden is uint16_t[W] (per-frequency), broadcast to int32_t[C*W] */
         uint16_t *g_fa_w = calloc(m->W, sizeof(uint16_t));
         int32_t *g_fa = calloc(total, sizeof(int32_t));
         int32_t *g_out = calloc(total, sizeof(int32_t));
@@ -232,14 +225,12 @@ int main() {
         { FILE *f = fopen(path, "rb"); if(f) { fread(g_ta, 2, m->C, f); fclose(f); } }
         snprintf(path, sizeof(path), "dump_matlab/frame0_%s_ctfa_fa.bin", m->name);
         { FILE *f = fopen(path, "rb"); if(f) { fread(g_fa_w, 2, m->W, f); fclose(f); } }
-        /* Broadcast fa golden from (W,) uint16 → (C,W) int32 for comparison */
         for (int c = 0; c < m->C; c++)
             for (int w = 0; w < m->W; w++)
                 g_fa[c * m->W + w] = (int32_t)g_fa_w[w];
         snprintf(path, sizeof(path), "dump_matlab/frame0_%s_ctfa_out.bin", m->name);
         { FILE *f = fopen(path, "rb"); if(f) { fread(g_out, 4, total, f); fclose(f); } }
 
-        /* Baseline */
         uint16_t ta_gate[m->C]; int32_t fa_gate[total];
         int16_t ta_h[m->hidden_dim]; memset(ta_h, 0, m->hidden_dim * sizeof(int16_t));
         int32_t y_out[total];
@@ -249,12 +240,9 @@ int main() {
         double base_fa = snr_db(fa_gate, g_fa, total);
         double base_out = snr_db(y_out, g_out, total);
 
-        /* Grid search: ta qr1∈[-18,-10], ta qr2∈[-12,-4], ta fc∈[-12,-4]
-                        fa qr1∈[-18,-10], fa qr2∈[-12,-4], fa fc∈[-12,-4] */
         double best_ta = -999, best_fa = -999, best_out = -999;
         int bta1, bta2, btfc, bfa1, bfa2, bffc;
 
-        /* Coarse search: step=2 first, then refine near best */
         for (int ta1 = -18; ta1 <= -10; ta1 += 2)
         for (int ta2 = -12; ta2 <= -4; ta2 += 2)
         for (int tfc = -12; tfc <= -4; tfc += 2)
@@ -274,7 +262,6 @@ int main() {
             }
         }
 
-        /* Fine search: step=1 near best */
         for (int ta1 = bta1-1; ta1 <= bta1+1; ta1++)
         for (int ta2 = bta2-1; ta2 <= bta2+1; ta2++)
         for (int tfc = btfc-1; tfc <= btfc+1; tfc++)
@@ -302,14 +289,12 @@ int main() {
 
         free(g_in); free(g_ta); free(g_fa_w); free(g_fa); free(g_out);
     }
+}
 
-    /* ================================================================
-     * Decoder calibration (golden not yet exported for decoder cTFA)
-     * ================================================================ */
-    printf("\n--- DECODER cTFA ---\n");
-    printf("(Golden not yet exported for decoder cTFA intermediates; skipping)\n");
-    printf("To enable: add cTFA intermediate exports in export_all_layers.m ");
-    printf("for decoder d0-d4, then re-run export_all_layers.m\n");
-
+int main() {
+    printf("=== cTFA QR Calibration ===\n\n");
+    calibrate_module_set(enc_modules, 5, "ENCODER");
+    printf("\n");
+    calibrate_module_set(dec_modules, 5, "DECODER");
     return 0;
 }

@@ -14,6 +14,42 @@
 
 #include "ulunas_fp.h"
 #include "ulunas_matlab_weights.h"
+#include "ulunas_ctfa_qr.h"
+
+/* ================================================================
+ * Global cTFA QR Configuration (for calibration tools)
+ * ================================================================
+ * Defaults: v2-calibrated values from 2026-07-06 Session 3
+ */
+#ifdef QR_CALIBRATION_MODE
+ctfa_qr_t g_qr_d0 = {-16, -4, -12,  -14, -6, -12};
+ctfa_qr_t g_qr_d1 = {-16, -14, -6,  -18, -14, -8};
+ctfa_qr_t g_qr_d2 = {-19, -15, -5,  -12, -8, -1};
+ctfa_qr_t g_qr_d3 = {-14, -14, -12,  -10, -10, -10};
+ctfa_qr_t g_qr_d4 = {-14, -14, -4,  -8, -14, -6};
+
+#define D0_TA (g_qr_d0.ta_qr1), (g_qr_d0.ta_qr2), (g_qr_d0.ta_fc)
+#define D0_FA (g_qr_d0.fa_qr1), (g_qr_d0.fa_qr2), (g_qr_d0.fa_fc)
+#define D1_TA (g_qr_d1.ta_qr1), (g_qr_d1.ta_qr2), (g_qr_d1.ta_fc)
+#define D1_FA (g_qr_d1.fa_qr1), (g_qr_d1.fa_qr2), (g_qr_d1.fa_fc)
+#define D2_TA (g_qr_d2.ta_qr1), (g_qr_d2.ta_qr2), (g_qr_d2.ta_fc)
+#define D2_FA (g_qr_d2.fa_qr1), (g_qr_d2.fa_qr2), (g_qr_d2.fa_fc)
+#define D3_TA (g_qr_d3.ta_qr1), (g_qr_d3.ta_qr2), (g_qr_d3.ta_fc)
+#define D3_FA (g_qr_d3.fa_qr1), (g_qr_d3.fa_qr2), (g_qr_d3.fa_fc)
+#define D4_TA (g_qr_d4.ta_qr1), (g_qr_d4.ta_qr2), (g_qr_d4.ta_fc)
+#define D4_FA (g_qr_d4.fa_qr1), (g_qr_d4.fa_qr2), (g_qr_d4.fa_fc)
+#else
+#define D0_TA -16, -4, -12
+#define D0_FA -14, -6, -12
+#define D1_TA -16, -14, -6
+#define D1_FA -18, -14, -8
+#define D2_TA -19, -15, -5
+#define D2_FA -12, -8, -1
+#define D3_TA -14, -14, -12
+#define D3_FA -10, -10, -10
+#define D4_TA -14, -14, -4
+#define D4_FA -8, -14, -6
+#endif
 
 /* ================================================================
  * XConv_module — Encoder Entry Block
@@ -314,20 +350,20 @@ void De_XDWS0_module(const int32_t *x, const int32_t *x_skip,
                     decoder_de_convs_0_dconv_3_affine_weight,decoder_de_convs_0_dconv_3_affine_bias,
                     decoder_de_convs_0_dconv_3_slope_weight,y_tconv);
 
-    /* cTFA: ta Qr=-13,-8 fc=-9 | fa Qr=-12,-7 fc=-9 */
+    /* cTFA: D0_TA / D0_FA */
     uint16_t ta_gate[32]; int32_t fa_gate[32*33];
     cTFA_ta_module(y_tconv,32,33,CH_DEC_XDWS0,
                    decoder_de_convs_0_dconv_4_ta_gru_weight_ih_l0,decoder_de_convs_0_dconv_4_ta_gru_bias_ih_l0,
                    decoder_de_convs_0_dconv_4_ta_gru_weight_hh_l0,decoder_de_convs_0_dconv_4_ta_gru_bias_hh_l0,
                    decoder_de_convs_0_dconv_4_ta_fc_weight,decoder_de_convs_0_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-9);
+                   ta_h,ta_gate, D0_TA);
     cTFA_fa_module(y_tconv,32,33,
                    decoder_de_convs_0_dconv_4_fa_gru_weight_ih_l0,decoder_de_convs_0_dconv_4_fa_gru_bias_ih_l0,
                    decoder_de_convs_0_dconv_4_fa_gru_weight_hh_l0,decoder_de_convs_0_dconv_4_fa_gru_bias_hh_l0,
                    decoder_de_convs_0_dconv_4_fa_gru_weight_ih_l0_reverse,decoder_de_convs_0_dconv_4_fa_gru_bias_ih_l0_reverse,
                    decoder_de_convs_0_dconv_4_fa_gru_weight_hh_l0_reverse,decoder_de_convs_0_dconv_4_fa_gru_bias_hh_l0_reverse,
                    decoder_de_convs_0_dconv_4_fa_fc_weight,decoder_de_convs_0_dconv_4_fa_fc_bias,
-                   fa_gate,-12,-7,-9);
+                   fa_gate, D0_FA);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,32,33,y);
@@ -384,20 +420,20 @@ void De_XMB0_module(const int32_t *x, const int32_t *x_skip,
       bn_fixed(y_pconv1,24,33,decoder_de_convs_1_pconv2_1_weight,decoder_de_convs_1_pconv2_1_bias,
                decoder_de_convs_1_pconv2_1_running_mean,decoder_de_convs_1_pconv2_1_running_var,-11,-11); }
 
-    /* cTFA: ta Qr=-13,-8 fc=-9 | fa Qr=-12,-7 fc=-9 */
+    /* cTFA: D1_TA / D1_FA */
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
     cTFA_ta_module(y_pconv1,24,33,CH_DEC_XMB0,
                    decoder_de_convs_1_pconv2_2_ta_gru_weight_ih_l0,decoder_de_convs_1_pconv2_2_ta_gru_bias_ih_l0,
                    decoder_de_convs_1_pconv2_2_ta_gru_weight_hh_l0,decoder_de_convs_1_pconv2_2_ta_gru_bias_hh_l0,
                    decoder_de_convs_1_pconv2_2_ta_fc_weight,decoder_de_convs_1_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-9);
+                   ta_h,ta_gate, D1_TA);
     cTFA_fa_module(y_pconv1,24,33,
                    decoder_de_convs_1_pconv2_2_fa_gru_weight_ih_l0,decoder_de_convs_1_pconv2_2_fa_gru_bias_ih_l0,
                    decoder_de_convs_1_pconv2_2_fa_gru_weight_hh_l0,decoder_de_convs_1_pconv2_2_fa_gru_bias_hh_l0,
                    decoder_de_convs_1_pconv2_2_fa_gru_weight_ih_l0_reverse,decoder_de_convs_1_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    decoder_de_convs_1_pconv2_2_fa_gru_weight_hh_l0_reverse,decoder_de_convs_1_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    decoder_de_convs_1_pconv2_2_fa_fc_weight,decoder_de_convs_1_pconv2_2_fa_fc_bias,
-                   fa_gate,-12,-7,-9);
+                   fa_gate, D1_FA);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[24*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,24,33,y_attn);
@@ -441,20 +477,20 @@ void De_XDWS1_module(const int32_t *x, const int32_t *x_skip,
                  decoder_de_convs_2_dconv_3_affine_weight,decoder_de_convs_2_dconv_3_affine_bias,
                  decoder_de_convs_2_dconv_3_slope_weight,y_tconv);
 
-    /* cTFA: ta Qr=-13,-8 fc=-8 | fa Qr=-13,-8 fc=-9 */
+    /* cTFA: D2_TA / D2_FA */
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
     cTFA_ta_module(y_tconv,24,33,CH_DEC_XMB0,  /* 48 hidden like XDWS0 */
                    decoder_de_convs_2_dconv_4_ta_gru_weight_ih_l0,decoder_de_convs_2_dconv_4_ta_gru_bias_ih_l0,
                    decoder_de_convs_2_dconv_4_ta_gru_weight_hh_l0,decoder_de_convs_2_dconv_4_ta_gru_bias_hh_l0,
                    decoder_de_convs_2_dconv_4_ta_fc_weight,decoder_de_convs_2_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate, D2_TA);
     cTFA_fa_module(y_tconv,24,33,
                    decoder_de_convs_2_dconv_4_fa_gru_weight_ih_l0,decoder_de_convs_2_dconv_4_fa_gru_bias_ih_l0,
                    decoder_de_convs_2_dconv_4_fa_gru_weight_hh_l0,decoder_de_convs_2_dconv_4_fa_gru_bias_hh_l0,
                    decoder_de_convs_2_dconv_4_fa_gru_weight_ih_l0_reverse,decoder_de_convs_2_dconv_4_fa_gru_bias_ih_l0_reverse,
                    decoder_de_convs_2_dconv_4_fa_gru_weight_hh_l0_reverse,decoder_de_convs_2_dconv_4_fa_gru_bias_hh_l0_reverse,
                    decoder_de_convs_2_dconv_4_fa_fc_weight,decoder_de_convs_2_dconv_4_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate, D2_FA);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,24,33,y);
@@ -506,20 +542,20 @@ void De_XMB1_module(const int32_t *x, const int32_t *x_skip,
       bn_fixed(y_pconv1,12,65,decoder_de_convs_3_pconv2_1_weight,decoder_de_convs_3_pconv2_1_bias,
                decoder_de_convs_3_pconv2_1_running_mean,decoder_de_convs_3_pconv2_1_running_var,-11,-11); }
 
-    /* cTFA: ta Qr=-13,-8 fc=-9 | fa Qr=-11,-6 fc=-9 */
+    /* cTFA: D3_TA / D3_FA */
     uint16_t ta_gate[12]; int32_t fa_gate[12*65];
     cTFA_ta_module(y_pconv1,12,65,CH_DEC_XMB1,
                    decoder_de_convs_3_pconv2_2_ta_gru_weight_ih_l0,decoder_de_convs_3_pconv2_2_ta_gru_bias_ih_l0,
                    decoder_de_convs_3_pconv2_2_ta_gru_weight_hh_l0,decoder_de_convs_3_pconv2_2_ta_gru_bias_hh_l0,
                    decoder_de_convs_3_pconv2_2_ta_fc_weight,decoder_de_convs_3_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-9);
+                   ta_h,ta_gate, D3_TA);
     cTFA_fa_module(y_pconv1,12,65,
                    decoder_de_convs_3_pconv2_2_fa_gru_weight_ih_l0,decoder_de_convs_3_pconv2_2_fa_gru_bias_ih_l0,
                    decoder_de_convs_3_pconv2_2_fa_gru_weight_hh_l0,decoder_de_convs_3_pconv2_2_fa_gru_bias_hh_l0,
                    decoder_de_convs_3_pconv2_2_fa_gru_weight_ih_l0_reverse,decoder_de_convs_3_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    decoder_de_convs_3_pconv2_2_fa_gru_weight_hh_l0_reverse,decoder_de_convs_3_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    decoder_de_convs_3_pconv2_2_fa_fc_weight,decoder_de_convs_3_pconv2_2_fa_fc_bias,
-                   fa_gate,-11,-6,-9);
+                   fa_gate, D3_FA);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[12*65]; cTFA_apply(y_pconv1,ta_gate,fa_gate,12,65,y_attn);
@@ -680,21 +716,20 @@ void De_XConv_module(const int32_t *x, const int32_t *x_skip,
              decoder_de_convs_4_ops_2_running_mean, decoder_de_convs_4_ops_2_running_var,
              -11, -11);
 
-    /* cTFA: ta Qr=-13,-8 fc=-8 | fa Qr=-13,-8 fc=-9
-     * nHidden=2 for Cout=1 */
+    /* cTFA: D4_TA / D4_FA */
     uint16_t ta_gate[1]; int32_t fa_gate[1*129];
     cTFA_ta_module(y_tconv, 1, 129, CH_DEC_XCONV,
                    decoder_de_convs_4_ops_4_ta_gru_weight_ih_l0,decoder_de_convs_4_ops_4_ta_gru_bias_ih_l0,
                    decoder_de_convs_4_ops_4_ta_gru_weight_hh_l0,decoder_de_convs_4_ops_4_ta_gru_bias_hh_l0,
                    decoder_de_convs_4_ops_4_ta_fc_weight,decoder_de_convs_4_ops_4_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate, D4_TA);
     cTFA_fa_module(y_tconv, 1, 129,
                    decoder_de_convs_4_ops_4_fa_gru_weight_ih_l0,decoder_de_convs_4_ops_4_fa_gru_bias_ih_l0,
                    decoder_de_convs_4_ops_4_fa_gru_weight_hh_l0,decoder_de_convs_4_ops_4_fa_gru_bias_hh_l0,
                    decoder_de_convs_4_ops_4_fa_gru_weight_ih_l0_reverse,decoder_de_convs_4_ops_4_fa_gru_bias_ih_l0_reverse,
                    decoder_de_convs_4_ops_4_fa_gru_weight_hh_l0_reverse,decoder_de_convs_4_ops_4_fa_gru_bias_hh_l0_reverse,
                    decoder_de_convs_4_ops_4_fa_fc_weight,decoder_de_convs_4_ops_4_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate, D4_FA);
 
     
     cTFA_apply(y_tconv, ta_gate, fa_gate, 1, 129, y);

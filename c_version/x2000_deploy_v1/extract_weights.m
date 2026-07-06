@@ -23,6 +23,15 @@ for i = 1:length(files)
     try
         s = load(['para_in_mat_FP/' files(i).name]);
         data = double(s.(name));
+
+        % GRU/RNN weight: transpose for C row-major (MATLAB stores col-major)
+        % .mat keeps original shape for MATLAB inference; only export is transposed
+        if (contains(name, 'gru') || contains(name, 'rnn')) && contains(name, 'weight')
+            if ismatrix(data) && size(data,1) ~= size(data,2)
+                data = data.';
+            end
+        end
+
     catch
         fprintf('  SKIP (load error): %s\n', name);
         continue;

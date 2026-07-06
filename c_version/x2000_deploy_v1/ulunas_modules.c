@@ -52,6 +52,21 @@ ctfa_qr_t g_qr_d4 = {-14, -14, -4,  -8, -14, -6};
 #endif
 
 /* ================================================================
+ * Global d4 TConv QR (for joint TConv+cTFA calibration)
+ * ================================================================ */
+#ifdef JOINT_CALIBRATION_MODE
+d4_tconv_qr_t g_d4_tconv = {-14, -11, -11};  /* conv_qr, bn_qr1, bn_qr2 */
+
+#define D4_TCONV_CQR  (g_d4_tconv.conv_qr)
+#define D4_TCONV_BN1  (g_d4_tconv.bn_qr1)
+#define D4_TCONV_BN2  (g_d4_tconv.bn_qr2)
+#else
+#define D4_TCONV_CQR  -14
+#define D4_TCONV_BN1  -11
+#define D4_TCONV_BN2  -11
+#endif
+
+/* ================================================================
  * XConv_module — Encoder Entry Block
  * ================================================================
  * x: (1, 129) → TConv(1→12, k=(3,3), s=2) → cTFA(ta+fa) → y(12, 65)
@@ -668,7 +683,7 @@ void De_XConv_module(const int32_t *x, const int32_t *x_skip,
     int stride_w = 2, pad_w = 1;
     int W_insert = Win_d4 + (Win_d4 - 1) * (stride_w - 1);  /* 65 + 64 = 129 */
     int W_padded = W_insert + 2 * pad_w;                      /* 129 + 2 = 131 */
-    int conv_qr_d4 = -14;  /* reverting: -17+TConv golden overfit, -14+chain cTFA calib = 7.39dB */
+    int conv_qr_d4 = D4_TCONV_CQR;  /* macro: chain-calibrated or joint-calibration override */
 
     int32_t y_tconv[1*129];
     for (int co = 0; co < Cout_d4; co++) {
@@ -710,11 +725,11 @@ void De_XConv_module(const int32_t *x, const int32_t *x_skip,
         memmove(conv_cache+(h*12+c)*65, conv_cache+((h+1)*12+c)*65, 65*sizeof(int32_t));
     for(int c=0;c<12;c++)memcpy(conv_cache+(1*12+c)*65, x_cat+c*65, 65*sizeof(int32_t));
 
-    /* BN: reverting to chain-compatible qr -11,-11 (7.39dB dec SNR) */
+    /* BN: D4_TCONV_BN macros */
     bn_fixed(y_tconv, Cout_d4, 129,
              decoder_de_convs_4_ops_2_weight, decoder_de_convs_4_ops_2_bias,
              decoder_de_convs_4_ops_2_running_mean, decoder_de_convs_4_ops_2_running_var,
-             -11, -11);
+             D4_TCONV_BN1, D4_TCONV_BN2);
 
     /* cTFA: D4_TA / D4_FA */
     uint16_t ta_gate[1]; int32_t fa_gate[1*129];

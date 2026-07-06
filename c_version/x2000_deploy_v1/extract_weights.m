@@ -69,9 +69,9 @@ function q_fmt = infer_qformat(name, data)
         q_fmt = 's32f20'; return;
     end
 
-    % GRU/RNN weights: s16f14
+    % GRU/RNN weights: s16f13 (para_in_mat_FP stores at Q13, ratio=8192)
     if (contains(name, 'gru') || contains(name, 'rnn')) && contains(name, 'weight')
-        q_fmt = 's16f14'; return;
+        q_fmt = 's16f13'; return;
     end
 
     % BN running_var: unsigned, small

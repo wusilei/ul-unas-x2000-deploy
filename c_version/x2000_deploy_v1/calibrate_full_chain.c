@@ -70,7 +70,7 @@ static double run_full_chain(const float *real_in, const float *imag_in,
     int32_t y_dec[1*129];
     Decoder_module(r2, &st, e0, e1, e2, e3, e4, y_dec);
 
-    double dec_snr = snr_db(y_dec, golden_dec, 129);
+    double dec_snr = snr_db(golden_dec, y_dec, 129);  /* golden as signal reference */
     if (dec_snr_out) *dec_snr_out = dec_snr;
 
     if (!use_mask_target) return dec_snr;
@@ -97,7 +97,7 @@ static double run_full_chain(const float *real_in, const float *imag_in,
     int32_t crm_out[2*257];
     MASK_fixed(y_bs, real_q, imag_q, crm_out);
 
-    return snr_db(crm_out, golden_mask, 2*257);
+    return snr_db(golden_mask, crm_out, 2*257);  /* golden as signal reference */
 }
 
 /* Coarse+fine grid search over 6 cTFA QR params */
@@ -246,9 +246,9 @@ int main(int argc, char **argv) {
     printf("#define D4_TCONV_BN1 %d\n", g_d4_tconv.bn_qr1);
     printf("#define D4_TCONV_BN2 %d\n", g_d4_tconv.bn_qr2);
 
-    double final_snr = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &dec_snr);
+    double final_snr = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &dec_snr_base);
     printf("\nFinal: %s=%.2f dB  dec=%.2f dB\n",
-           use_mask ? "mask" : "dec", final_snr, dec_snr);
+           use_mask ? "mask" : "dec", final_snr, dec_snr_base);
 
     free(ri); free(ii); free(gd); free(gm);
     return 0;

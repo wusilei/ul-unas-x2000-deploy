@@ -27,6 +27,7 @@ typedef struct {
 
 #ifdef QR_CALIBRATION_MODE
 extern ctfa_qr_t g_qr_d0, g_qr_d1, g_qr_d2, g_qr_d3, g_qr_d4;
+extern ctfa_qr_t g_qr_e0, g_qr_e1, g_qr_e2, g_qr_e3, g_qr_e4;
 #endif
 
 #ifdef JOINT_CALIBRATION_MODE

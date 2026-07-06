@@ -27,6 +27,11 @@ ctfa_qr_t g_qr_d1 = {-16, -14, -6,  -18, -14, -8};
 ctfa_qr_t g_qr_d2 = {-19, -15, -5,  -12, -8, -1};
 ctfa_qr_t g_qr_d3 = {-14, -14, -12,  -10, -10, -10};
 ctfa_qr_t g_qr_d4 = {-14, -14, -4,  -8, -14, -6};
+ctfa_qr_t g_qr_e0 = {-19, -14, -8,  -4, -2, -4};
+ctfa_qr_t g_qr_e1 = {-22, -14, -8,  -22, -22, -8};
+ctfa_qr_t g_qr_e2 = {-4, -14, -8,  -22, -6, -8};
+ctfa_qr_t g_qr_e3 = {-22, -14, -8,  -16, -2, -8};
+ctfa_qr_t g_qr_e4 = {-22, -14, -24,  -22, -22, -12};
 
 #define D0_TA (g_qr_d0.ta_qr1), (g_qr_d0.ta_qr2), (g_qr_d0.ta_fc)
 #define D0_FA (g_qr_d0.fa_qr1), (g_qr_d0.fa_qr2), (g_qr_d0.fa_fc)
@@ -38,6 +43,16 @@ ctfa_qr_t g_qr_d4 = {-14, -14, -4,  -8, -14, -6};
 #define D3_FA (g_qr_d3.fa_qr1), (g_qr_d3.fa_qr2), (g_qr_d3.fa_fc)
 #define D4_TA (g_qr_d4.ta_qr1), (g_qr_d4.ta_qr2), (g_qr_d4.ta_fc)
 #define D4_FA (g_qr_d4.fa_qr1), (g_qr_d4.fa_qr2), (g_qr_d4.fa_fc)
+#define E0_TA (g_qr_e0.ta_qr1), (g_qr_e0.ta_qr2), (g_qr_e0.ta_fc)
+#define E0_FA (g_qr_e0.fa_qr1), (g_qr_e0.fa_qr2), (g_qr_e0.fa_fc)
+#define E1_TA (g_qr_e1.ta_qr1), (g_qr_e1.ta_qr2), (g_qr_e1.ta_fc)
+#define E1_FA (g_qr_e1.fa_qr1), (g_qr_e1.fa_qr2), (g_qr_e1.fa_fc)
+#define E2_TA (g_qr_e2.ta_qr1), (g_qr_e2.ta_qr2), (g_qr_e2.ta_fc)
+#define E2_FA (g_qr_e2.fa_qr1), (g_qr_e2.fa_qr2), (g_qr_e2.fa_fc)
+#define E3_TA (g_qr_e3.ta_qr1), (g_qr_e3.ta_qr2), (g_qr_e3.ta_fc)
+#define E3_FA (g_qr_e3.fa_qr1), (g_qr_e3.fa_qr2), (g_qr_e3.fa_fc)
+#define E4_TA (g_qr_e4.ta_qr1), (g_qr_e4.ta_qr2), (g_qr_e4.ta_fc)
+#define E4_FA (g_qr_e4.fa_qr1), (g_qr_e4.fa_qr2), (g_qr_e4.fa_fc)
 #else
 #define D0_TA -16, -4, -12
 #define D0_FA -14, -6, -12
@@ -49,6 +64,16 @@ ctfa_qr_t g_qr_d4 = {-14, -14, -4,  -8, -14, -6};
 #define D3_FA -10, -10, -10
 #define D4_TA -14, -14, -4
 #define D4_FA -8, -14, -6
+#define E0_TA -19, -14, -8
+#define E0_FA -4, -2, -4
+#define E1_TA -22, -14, -8
+#define E1_FA -22, -22, -8
+#define E2_TA -4, -14, -8
+#define E2_FA -22, -6, -8
+#define E3_TA -22, -14, -8
+#define E3_FA -16, -2, -8
+#define E4_TA -22, -14, -24
+#define E4_FA -22, -22, -12
 #endif
 
 /* ================================================================
@@ -93,9 +118,9 @@ void XConv_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                    encoder_en_convs_0_ops_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_0_ops_4_ta_fc_weight,
                    encoder_en_convs_0_ops_4_ta_fc_bias,
-                   ta_h, ta_gate, -19, -6, -19);  /* calibrated */
+                   ta_h, ta_gate, E0_TA);
 
-    /* cTFA_fa: Qr=-17,-21, fc_shift=-8 (calibrated) */
+    /* cTFA_fa: E0_FA */
     int32_t fa_gate[12 * 65];
     cTFA_fa_module(y_tconv, 12, 65,
                    encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,
@@ -108,7 +133,7 @@ void XConv_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                    encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_0_ops_4_fa_fc_weight,
                    encoder_en_convs_0_ops_4_fa_fc_bias,
-                   fa_gate, -17, -21, -8);
+                   fa_gate, E0_FA);
 
     cTFA_apply(y_tconv, ta_gate, fa_gate, 12, 65, y);
 }
@@ -149,20 +174,20 @@ void XMB0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
       bn_fixed(y_pconv1,24,33,encoder_en_convs_1_pconv2_1_weight,encoder_en_convs_1_pconv2_1_bias,
                encoder_en_convs_1_pconv2_1_running_mean,encoder_en_convs_1_pconv2_1_running_var,-14,-14); }
 
-    /* cTFA: calibrated ta=-19,-13,-11 fa=-12,-5,-9 */
+    /* cTFA: E1_TA / E1_FA */
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
     cTFA_ta_module(y_pconv1,24,33,CTA_XMB0_HID,
                    encoder_en_convs_1_pconv2_2_ta_gru_weight_ih_l0,encoder_en_convs_1_pconv2_2_ta_gru_bias_ih_l0,
                    encoder_en_convs_1_pconv2_2_ta_gru_weight_hh_l0,encoder_en_convs_1_pconv2_2_ta_gru_bias_hh_l0,
                    encoder_en_convs_1_pconv2_2_ta_fc_weight,encoder_en_convs_1_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-19,-13,-11);
+                   ta_h,ta_gate, E1_TA);
     cTFA_fa_module(y_pconv1,24,33,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0,encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0,encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0_reverse,encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0_reverse,encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_1_pconv2_2_fa_fc_weight,encoder_en_convs_1_pconv2_2_fa_fc_bias,
-                   fa_gate,-12,-5,-9);
+                   fa_gate, E1_FA);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[24*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,24,33,y_attn);
@@ -200,14 +225,14 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                    encoder_en_convs_2_dconv_4_ta_gru_weight_ih_l0,encoder_en_convs_2_dconv_4_ta_gru_bias_ih_l0,
                    encoder_en_convs_2_dconv_4_ta_gru_weight_hh_l0,encoder_en_convs_2_dconv_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_2_dconv_4_ta_fc_weight,encoder_en_convs_2_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-19,-3,-23);
+                   ta_h,ta_gate, E2_TA);
     cTFA_fa_module(y_tconv,24,33,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_ih_l0,encoder_en_convs_2_dconv_4_fa_gru_bias_ih_l0,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_hh_l0,encoder_en_convs_2_dconv_4_fa_gru_bias_hh_l0,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_ih_l0_reverse,encoder_en_convs_2_dconv_4_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_hh_l0_reverse,encoder_en_convs_2_dconv_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_2_dconv_4_fa_fc_weight,encoder_en_convs_2_dconv_4_fa_fc_bias,
-                   fa_gate,-20,-9,-8);
+                   fa_gate, E2_FA);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,24,33,y);
@@ -255,14 +280,14 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_ih_l0,encoder_en_convs_3_pconv2_2_ta_gru_bias_ih_l0,
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_ta_gru_bias_hh_l0,
                    encoder_en_convs_3_pconv2_2_ta_fc_weight,encoder_en_convs_3_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-5,-11,-12);  /* calibrated */
+                   ta_h,ta_gate, E3_TA);
     cTFA_fa_module(y_pconv1,32,33,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_ih_l0,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0_reverse,encoder_en_convs_3_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0_reverse,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_3_pconv2_2_fa_fc_weight,encoder_en_convs_3_pconv2_2_fa_fc_bias,
-                   fa_gate,-16,-21,-8);
+                   fa_gate, E3_FA);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[32*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,32,33,y_attn);
@@ -303,14 +328,14 @@ void XDWS1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_4_dconv_4_ta_gru_weight_ih_l0,encoder_en_convs_4_dconv_4_ta_gru_bias_ih_l0,
                    encoder_en_convs_4_dconv_4_ta_gru_weight_hh_l0,encoder_en_convs_4_dconv_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_4_dconv_4_ta_fc_weight,encoder_en_convs_4_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-19,-13,-11);  /* calibrated */
+                   ta_h,ta_gate, E4_TA);
     cTFA_fa_module(y_tconv,16,33,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_ih_l0,encoder_en_convs_4_dconv_4_fa_gru_bias_ih_l0,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_hh_l0,encoder_en_convs_4_dconv_4_fa_gru_bias_hh_l0,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_ih_l0_reverse,encoder_en_convs_4_dconv_4_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_hh_l0_reverse,encoder_en_convs_4_dconv_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_4_dconv_4_fa_fc_weight,encoder_en_convs_4_dconv_4_fa_fc_bias,
-                   fa_gate,-6,-19,-9);
+                   fa_gate, E4_FA);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,16,33,y);

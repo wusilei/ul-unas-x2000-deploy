@@ -100,27 +100,42 @@ static double run_full_chain(const float *real_in, const float *imag_in,
     return snr_db(golden_mask, crm_out, 2*257);  /* golden as signal reference */
 }
 
-/* Coarse+fine grid search over 6 cTFA QR params */
-static double search_ctfa_6d(ctfa_qr_t *qr, int has_state,
-                              const float *ri, const float *ii,
-                              const int32_t *gm, const int32_t *gd,
-                              int use_mask, double dec_snr_floor,
-                              double *base_out) {
-    double base = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
+/* Multi-frame evaluator helper */
+static double eval_multi(const float **ri, const float **ii,
+                          const int32_t **gm, const int32_t **gd,
+                          int n_frames, int use_mask, double dec_snr_floor,
+                          double *dec_out) {
+    double sum = 0, dsum = 0;
+    for (int f = 0; f < n_frames; f++) {
+        double d;
+        sum += run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, dec_snr_floor, &d);
+        dsum += d;
+    }
+    if (dec_out) *dec_out = dsum / n_frames;
+    return sum / n_frames;
+}
+
+/* Coarse+fine grid search over 6 cTFA QR params, multi-frame aware */
+static double search_ctfa_6d_multi(ctfa_qr_t *qr,
+                                    const float **ri, const float **ii,
+                                    const int32_t **gm, const int32_t **gd,
+                                    int n_frames, int use_mask, double dec_snr_floor,
+                                    double *base_out) {
+    double base = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
     if (base_out) *base_out = base;
 
     double best = base;
     ctfa_qr_t best_qr = *qr;
 
     /* Coarse: step=2 */
-    for (int ta1 = -18; ta1 <= -4; ta1 += 2)
+    for (int ta1 = -20; ta1 <= -2; ta1 += 2)
     for (int ta2 = -14; ta2 <= -2; ta2 += 2)
     for (int tfc = -12; tfc <= -2; tfc += 2)
-    for (int fa1 = -18; fa1 <= -4; fa1 += 2)
+    for (int fa1 = -20; fa1 <= -2; fa1 += 2)
     for (int fa2 = -14; fa2 <= -2; fa2 += 2)
     for (int ffc = -12; ffc <= -2; ffc += 2) {
         *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
+        double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
         if (s > best) { best = s; best_qr = *qr; }
     }
 
@@ -132,7 +147,7 @@ static double search_ctfa_6d(ctfa_qr_t *qr, int has_state,
     for (int fa2 = best_qr.fa_qr2-1; fa2 <= best_qr.fa_qr2+1; fa2++)
     for (int ffc = best_qr.fa_fc-1; ffc <= best_qr.fa_fc+1; ffc++) {
         *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
+        double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
         if (s > best) { best = s; best_qr = *qr; }
     }
 
@@ -148,33 +163,54 @@ static void print_qr_macro(const char *name, ctfa_qr_t *qr, double snr, double b
 }
 
 int main(int argc, char **argv) {
-    int use_mask = 0;
+    int use_mask = 0, n_frames = 1;
+    double floor_delta = 3.0;
     const char *mode = "decoder";
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mask")) use_mask = 1;
+        else if (!strncmp(argv[i], "--floor=", 8)) floor_delta = atof(argv[i]+8);
+        else if (!strncmp(argv[i], "--frames=", 9)) n_frames = atoi(argv[i]+9);
         else mode = argv[i];
     }
+    if (n_frames < 1) n_frames = 1; if (n_frames > 5) n_frames = 5;
 
-    printf("=== Full-Chain Calibrator (zero measurement gap) ===\n");
-    printf("Target: %s SNR, Mode: %s\n\n", use_mask ? "MASK" : "decoder", mode);
+    printf("=== Full-Chain Calibrator (zero gap, %d frames) ===\n", n_frames);
+    printf("Target: %s SNR, Mode: %s", use_mask ? "MASK" : "decoder", mode);
+    if (use_mask) printf(", floor=baseline-%.1fdB", floor_delta);
+    printf("\n\n");
 
-    /* Load inputs: frame 0 */
-    float *ri = load_float("dump_matlab/frame0_stft_real.bin", 257);
-    float *ii = load_float("dump_matlab/frame0_stft_imag.bin", 257);
-    int32_t *gd = load_int32("dump_matlab/frame0_dec.bin", 1*129);
-    int32_t *gm = load_int32("dump_matlab/frame0_mask.bin", 2*257);
-    if (!ri || !ii || !gd || !gm) { printf("ERROR: missing input files\n"); return 1; }
+    /* Load all frames */
+    float *ri[5], *ii[5]; int32_t *gd[5], *gm[5];
+    for (int f = 0; f < n_frames; f++) {
+        char p[256];
+        snprintf(p, sizeof(p), "dump_matlab/frame%d_stft_real.bin", f); ri[f] = load_float(p, 257);
+        snprintf(p, sizeof(p), "dump_matlab/frame%d_stft_imag.bin", f); ii[f] = load_float(p, 257);
+        snprintf(p, sizeof(p), "dump_matlab/frame%d_dec.bin", f);      gd[f] = load_int32(p, 1*129);
+        snprintf(p, sizeof(p), "dump_matlab/frame%d_mask.bin", f);     gm[f] = load_int32(p, 2*257);
+        if (!ri[f] || !ii[f] || !gd[f] || !gm[f]) { printf("ERROR: missing frame %d\n", f); return 1; }
+    }
 
-    /* Baseline: measure current dec + mask SNR with full chain */
-    double dec_snr_base;
-    double base_snr = run_full_chain(ri, ii, gm, gd, use_mask, -999.0, &dec_snr_base);
-    printf("Baseline: %s=%.2f dB  dec=%.2f dB\n\n",
-           use_mask ? "mask" : "dec", base_snr, dec_snr_base);
+    /* Baseline: average over all frames */
+    double sum_snr = 0, sum_dec = 0;
+    for (int f = 0; f < n_frames; f++) {
+        double d;
+        sum_snr += run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, -999.0, &d);
+        sum_dec += d;
+    }
+    double base_snr = sum_snr / n_frames;
+    double dec_snr_base = sum_dec / n_frames;
+    printf("Baseline (%d frames): %s=%.2f dB  dec=%.2f dB\n\n",
+           n_frames, use_mask ? "mask" : "dec", base_snr, dec_snr_base);
 
-    /* MASK-targeted: allow up to 3 dB decoder degradation */
-    double dec_snr_floor = use_mask ? dec_snr_base - 3.0 : -999.0;
-    if (use_mask) printf("Decoder SNR floor: %.2f dB\n\n", dec_snr_floor);
+    /* MASK-targeted: allow configurable decoder degradation */
+    double dec_snr_floor = use_mask ? dec_snr_base - floor_delta : -999.0;
+    if (use_mask) printf("Decoder SNR floor: %.2f dB (Δ=%.1f)\n\n", dec_snr_floor, floor_delta);
+
+    /* Build frame pointer arrays for multi-frame eval */
+    const float  *rip[5], *iip[5];
+    const int32_t *gmp[5], *gdp[5];
+    for (int f = 0; f < n_frames; f++) { rip[f] = ri[f]; iip[f] = ii[f]; gmp[f] = gm[f]; gdp[f] = gd[f]; }
 
     /* ================================================================
      * Decoder cTFA calibration (backward: d4→d0)
@@ -185,13 +221,25 @@ int main(int argc, char **argv) {
         ctfa_qr_t *dec_qrs[] = {&g_qr_d4, &g_qr_d3, &g_qr_d2, &g_qr_d1, &g_qr_d0};
         const char *dec_names[] = {"D4","D3","D2","D1","D0"};
 
-        for (int m = 0; m < 5; m++) {
-            double base;
-            double best = search_ctfa_6d(dec_qrs[m], 1, ri, ii, gm, gd,
-                                         use_mask, dec_snr_floor, &base);
-            double d;
-            run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &d);
-            print_qr_macro(dec_names[m], dec_qrs[m], best, base, d);
+        int n_passes = use_mask ? 3 : 1;  /* mask: multi-pass tightening */
+        for (int pass = 0; pass < n_passes; pass++) {
+            double floor = dec_snr_floor;
+            if (use_mask && pass > 0) {
+                /* Tighten floor after each pass */
+                double cur_dec = eval_multi(rip, iip, gmp, gdp, n_frames, 0, -999.0, NULL);
+                floor = cur_dec - (floor_delta - pass * 1.0);
+                if (floor < dec_snr_base - 1.0) floor = dec_snr_base - 1.0;
+                printf("\n--- Pass %d: floor=%.1f dB ---\n\n", pass + 1, floor);
+            }
+
+            for (int m = 0; m < 5; m++) {
+                double base;
+                double best = search_ctfa_6d_multi(dec_qrs[m],
+                    rip, iip, gmp, gdp, n_frames, use_mask, floor, &base);
+                double d;
+                eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, floor, &d);
+                print_qr_macro(dec_names[m], dec_qrs[m], best, base, d);
+            }
         }
     }
 
@@ -214,7 +262,7 @@ int main(int argc, char **argv) {
             g_d4_tconv.conv_qr = tconv_cq[ic];
             g_d4_tconv.bn_qr1  = tconv_b1[ib1];
             g_d4_tconv.bn_qr2  = tconv_b2[ib2];
-            double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, NULL);
+            double s = eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, NULL);
             if (s > best_tc) {
                 best_tc = s;
                 best_cq = tconv_cq[ic]; best_b1 = tconv_b1[ib1]; best_b2 = tconv_b2[ib2];
@@ -223,7 +271,7 @@ int main(int argc, char **argv) {
 
         g_d4_tconv.conv_qr = best_cq; g_d4_tconv.bn_qr1 = best_b1; g_d4_tconv.bn_qr2 = best_b2;
         double d;
-        double s = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &d);
+        double s = eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &d);
         printf("Best d4 TConv: conv=%d bn=(%d,%d)  %s=%.2f dB  dec=%.2f\n\n",
                best_cq, best_b1, best_b2, use_mask ? "mask" : "dec", s, d);
     }
@@ -246,10 +294,10 @@ int main(int argc, char **argv) {
     printf("#define D4_TCONV_BN1 %d\n", g_d4_tconv.bn_qr1);
     printf("#define D4_TCONV_BN2 %d\n", g_d4_tconv.bn_qr2);
 
-    double final_snr = run_full_chain(ri, ii, gm, gd, use_mask, dec_snr_floor, &dec_snr_base);
-    printf("\nFinal: %s=%.2f dB  dec=%.2f dB\n",
-           use_mask ? "mask" : "dec", final_snr, dec_snr_base);
+    double final_snr = eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &dec_snr_base);
+    printf("\nFinal (%d frames): %s=%.2f dB  dec=%.2f dB\n",
+           n_frames, use_mask ? "mask" : "dec", final_snr, dec_snr_base);
 
-    free(ri); free(ii); free(gd); free(gm);
+    for (int f = 0; f < n_frames; f++) { free(ri[f]); free(ii[f]); free(gd[f]); free(gm[f]); }
     return 0;
 }

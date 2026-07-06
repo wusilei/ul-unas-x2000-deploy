@@ -765,7 +765,8 @@ void MASK_fixed(const int16_t *mask, const int32_t *real_in,
 void sigmoid_fixed(const int32_t *x, int N, uint16_t *y) {
     for (int i = 0; i < N; i++) {
         float val = Q20_TO_F(x[i]);
-        y[i] = U2Q15(sigmoidf_fp(val));
+        uint16_t v = U2Q15(sigmoidf_fp(val));
+        y[i] = v > 32767 ? 32767 : v;  /* clamp to int16-safe range */
     }
 }
 

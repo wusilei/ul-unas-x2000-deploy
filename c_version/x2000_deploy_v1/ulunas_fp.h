@@ -1,0 +1,541 @@
+/**
+ * ulunas_fp.h — UL-UNAS MATLAB→C Fixed-Point Implementation
+ * ==========================================================
+ * Q-format matching MATLAB Fix_point.m exactly:
+ *
+ *   s32f20: activations (int32_t, 20 frac bits, ×1048576)
+ *   s32f18: Conv weights encoder (int32_t, 18 frac bits, ×262144)
+ *   s16f15: GRU hidden / sigmoid output (int16_t, 15 frac bits, ×32768)
+ *   s16f14: BN/PReLU/DeConv weights (int16_t, 14 frac bits, ×16384)
+ *   s16f13: FC/DD-Conv/PC weights (int16_t, 13 frac bits, ×8192)
+ *   s16f12: GRU/LN weights (int16_t, 12 frac bits, ×4096)
+ *   s16f11: LN running_var (int16_t, 11 frac bits, ×2048)
+ *   s16f10: GRU bias (int16_t, 10 frac bits, ×1024)
+ *   u16f15: sigmoid/tanh output / BM/BS (uint16_t, 15 frac bits, ×32768)
+ *   u16f14: BN weight (uint16_t, 14 frac bits, ×16384)
+ *   u16f13: BN running_var (uint16_t, 13 frac bits, ×8192)
+ *   u16f12: BN running_var (uint16_t, 12 frac bits, ×4096)
+ *   u16f11: LN running_var (uint16_t, 11 frac bits, ×2048)
+ *
+ * Target: Ingenic X2000 MIPS32R2 (no FPU) + PC verification
+ *
+ * Key differences from GTCRN:
+ * - Single channel log-mag input (not 3ch mag+real+imag)
+ * - cTFA (channel-wise T-F Attention) instead of TRA/DeTRA
+ * - ERB filterbank with low-freq pass-through
+ * - log10(mag) instead of sqrt(mag)
+ * - Hann² + wsum COLA instead of sqrt-Hann
+ * - XConv/XMB/XDWS encoder instead of GT-Conv
+ *
+ * Data layout: (C, W) for 2D tensors
+ *   Indexing: element[c][w] = data[c*W + w]
+ */
+
+#ifndef ULUNAS_FP_H
+#define ULUNAS_FP_H
+
+#include <stdint.h>
+#include <string.h>
+#include <math.h>
+#include <stdlib.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ================================================================
+ * Q-format Constants (matching MATLAB Fix_point.m)
+ * ================================================================ */
+
+/* Activation Q-formats */
+#define Q_ACT       20    /* s32f20: main activations */
+#define Q_ACT_TR    18    /* s32f18: TRA/DeTRA agg quant (reserved) */
+
+/* Weight Q-formats */
+#define Q_WGT_CONV_E  18  /* s32f18: Conv weights (encoder Conv0, DeConv0) */
+#define Q_WGT_FC      13  /* s16f13: FC weights, DD-Conv, PC weights */
+#define Q_WGT_GRU     12  /* s16f12: GRU weights, LN weights */
+#define Q_WGT_BN      14  /* s16f14 / u16f14: BN/PReLU weights */
+#define Q_WGT_GRU_BIAS 10 /* s16f10: GRU bias */
+#define Q_WGT_SIGMOID 15  /* u16f15: sigmoid/tanh output */
+#define Q_WGT_BM_BS   15  /* u16f15: BM/BS weights */
+#define Q_WGT_LN_VAR  11  /* u16f11: LN running_var */
+
+/* BN running_var Q-formats (varies per block) */
+#define Q_BN_VAR_14   14  /* u16f14 */
+#define Q_BN_VAR_13   13  /* u16f13 */
+#define Q_BN_VAR_12   12  /* u16f12 */
+#define Q_BN_VAR_10   10  /* u16f10 */
+
+/* ================================================================
+ * Scale / Conversion Macros
+ * ================================================================ */
+
+/* Safe clamp to int16_t range */
+static inline int16_t sat_s16f15(float x) {
+    float r = roundf(x * 32768.0f);
+    if (r > 32767.0f) return 32767;
+    if (r < -32768.0f) return -32768;
+    return (int16_t)r;
+}
+
+#define F2Q20(x)  ((int32_t)roundf((x) * 1048576.0f))   /* × 2^20 */
+#define F2Q18(x)  ((int32_t)roundf((x) * 262144.0f))    /* × 2^18 */
+#define F2Q15(x)  (sat_s16f15(x))                        /* × 2^15 */
+#define F2Q14(x)  ((int16_t)roundf((x) * 16384.0f))     /* × 2^14 */
+#define F2Q13(x)  ((int16_t)roundf((x) * 8192.0f))      /* × 2^13 */
+#define F2Q12(x)  ((int16_t)roundf((x) * 4096.0f))      /* × 2^12 */
+#define F2Q11(x)  ((int16_t)roundf((x) * 2048.0f))      /* × 2^11 */
+#define F2Q10(x)  ((int16_t)roundf((x) * 1024.0f))      /* × 2^10 */
+
+#define U2Q15(x)  ((uint16_t)roundf((x) * 32768.0f))
+#define U2Q14(x)  ((uint16_t)roundf((x) * 16384.0f))
+#define U2Q13(x)  ((uint16_t)roundf((x) * 8192.0f))
+#define U2Q12(x)  ((uint16_t)roundf((x) * 4096.0f))
+#define U2Q11(x)  ((uint16_t)roundf((x) * 2048.0f))
+#define U2Q10(x)  ((uint16_t)roundf((x) * 1024.0f))
+
+/* Dequant */
+#define Q20_TO_F(x)  ((float)(x) / 1048576.0f)
+#define Q18_TO_F(x)  ((float)(x) / 262144.0f)
+#define Q15_TO_F(x)  ((float)(x) / 32768.0f)
+#define Q10_TO_F(x)  ((float)(x) / 1024.0f)
+
+/* ================================================================
+ * Saturation Helpers
+ * ================================================================ */
+
+static inline int32_t sat32(int64_t x) {
+    if (x > INT32_MAX) return INT32_MAX;
+    if (x < INT32_MIN) return INT32_MIN;
+    return (int32_t)x;
+}
+
+static inline int16_t sat16(int32_t x) {
+    if (x > INT16_MAX) return INT16_MAX;
+    if (x < INT16_MIN) return INT16_MIN;
+    return (int16_t)x;
+}
+
+static inline uint16_t usat16(int32_t x) {
+    if (x > UINT16_MAX) return UINT16_MAX;
+    if (x < 0) return 0;
+    return (uint16_t)x;
+}
+
+/* ROUND(x) in C: add half and truncate towards zero */
+static inline int32_t round_div(int64_t num, int64_t den) {
+    int64_t half = den >> 1;
+    if (num >= 0) return (int32_t)((num + half) / den);
+    else return (int32_t)((num - half) / den);
+}
+
+/* ================================================================
+ * Sigmoid & Tanh (soft-float, to be replaced by LUT in P0)
+ * ================================================================ */
+
+static inline float sigmoidf_fp(float x) {
+    if (x > 88.0f) return 1.0f;
+    if (x < -88.0f) return 0.0f;
+    return 1.0f / (1.0f + expf(-x));
+}
+
+static inline float tanhf_fp(float x) {
+    return tanhf(x);
+}
+
+/* ================================================================
+ * Dimension Constants
+ * ================================================================ */
+
+#define N_FFT       512
+#define WIN_LEN     512
+#define WIN_INC     256
+#define N_BINS      257
+#define N_BINS_BM   129
+#define N_BINS_MID  65
+#define N_BINS_SMALL 33
+
+/* UL-UNAS specific channel dimensions */
+#define CH_IN       1     /* single log-mag channel */
+#define CH_XCONV    12    /* XConv output channels */
+#define CH_XMB0     24    /* XMB0 / XDWS0 channels */
+#define CH_XMB1     32    /* XMB1 channels */
+#define CH_XDWS1    16    /* XDWS1 / GDPRNN channels */
+#define CH_OUT      2     /* final CRM output (I, Q) */
+
+/* cTFA GRU hidden dimensions */
+#define CTA_XCONV_HID   24  /* XConv cTFA_ta GRU hidden */
+#define CTA_XMB0_HID    48  /* XMB0 / XDWS0 cTFA_ta GRU hidden */
+#define CTA_XMB1_HID    64  /* XMB1 cTFA_ta GRU hidden */
+#define CTA_XDWS1_HID   32  /* XDWS1 cTFA_ta GRU hidden */
+#define CTA_FA_HID      4   /* cTFA_fa BiGRU hidden (all modules) */
+#define CTA_FA_SEG      17  /* cTFA_fa segments (ceil(68/4)=17) */
+
+/* Intra/Inter RNN dimensions */
+#define INTRA_GRU_HID   4   /* Intra-RNN BiGRU hidden per group */
+#define INTER_GRU_HID   8   /* Inter-RNN GRU hidden per group */
+#define INTRA_FC_DIM    8   /* Intra-RNN FC output dim */
+#define INTER_FC_DIM    8   /* Inter-RNN FC output dim */
+
+/* Decoder specific */
+#define CH_DEC_XDWS0    64  /* De_XDWS0 cTFA_ta hidden (= XMB1 hid) */
+#define CH_DEC_XMB0     48  /* De_XMB0 / De_XDWS1 cTFA_ta hidden */
+#define CH_DEC_XMB1     24  /* De_XMB1 cTFA_ta hidden */
+#define CH_DEC_XCONV    2   /* De_XConv cTFA_ta hidden */
+
+/* TConv cache dimensions */
+#define CACHE_XCONV_ROWS    2   /* XConv: stores 2 prev frames, H_in=3 */
+#define CACHE_XMB0_ROWS     1   /* XMB0: stores 1 prev frame, H_in=2 */
+#define CACHE_XDWS0_ROWS    1   /* XDWS0: stores 1 prev frame, H_in=2 */
+#define CACHE_DEXDWS1_ROWS  1   /* De_XDWS1: stores 1 prev frame, H_in=2 */
+#define CACHE_DEXMB1_ROWS   1   /* De_XMB1: stores 1 prev frame, H_in=2 */
+#define CACHE_DEXCONV_ROWS  2   /* De_XConv: stores 2 prev frames, H_in=3 */
+
+/* ================================================================
+ * Model State (extern — allocated by user)
+ * ================================================================ */
+
+typedef struct {
+    /* ---- Encoder Conv caches ---- */
+    /* XConv: TConv cache (2 rows, 1 chan, 129 freq) = 258 */
+    int32_t enc_xconv_cache[CACHE_XCONV_ROWS * 1 * N_BINS_BM];
+    /* XMB0: TConv cache (1 row, 24 ch, 65 freq) = 1560 */
+    int32_t enc_xmb0_cache[1 * CH_XMB0 * N_BINS_MID];
+    /* XDWS0: TConv cache (1 row, 24 ch, 33 freq) = 792 */
+    int32_t enc_xdws0_cache[1 * CH_XMB0 * N_BINS_SMALL];
+
+    /* ---- Encoder cTFA_ta GRU hidden states ---- */
+    int16_t enc_xconv_ta_h[CTA_XCONV_HID];       /* (24,) */
+    int16_t enc_xmb0_ta_h[CTA_XMB0_HID];          /* (48,) */
+    int16_t enc_xdws0_ta_h[CTA_XMB0_HID];         /* (48,) */
+    int16_t enc_xmb1_ta_h[CTA_XMB1_HID];          /* (64,) */
+    int16_t enc_xdws1_ta_h[CTA_XDWS1_HID];        /* (32,) */
+
+    /* ---- Decoder cTFA_ta GRU hidden states ---- */
+    int16_t dec_xdws0_ta_h[CH_DEC_XDWS0];         /* (64,) */
+    int16_t dec_xmb0_ta_h[CH_DEC_XMB0];           /* (48,) */
+    int16_t dec_xdws1_ta_h[CH_DEC_XMB0];          /* (48,) */
+    int16_t dec_xmb1_ta_h[CH_DEC_XMB1];           /* (24,) */
+    int16_t dec_xconv_ta_h[CH_DEC_XCONV];         /* (2,) */
+
+    /* ---- Decoder Conv caches ---- */
+    /* De_XDWS1: GTConv cache (1 row, 24 ch, 33 freq) = 792 */
+    int32_t dec_xdws1_cache[1 * CH_XMB0 * N_BINS_SMALL];
+    /* De_XMB1: GTConv cache (1 row, 12 ch, 33 freq) = 396 */
+    int32_t dec_xmb1_cache[1 * CH_XCONV * N_BINS_SMALL];
+    /* De_XConv: TConv cache (2 rows, 12 ch, 65 freq) = 1560 */
+    int32_t dec_xconv_cache[CACHE_DEXCONV_ROWS * CH_XCONV * N_BINS_MID];
+
+    /* ---- Inter-RNN hidden states ---- */
+    int16_t inter_prev0[N_BINS_SMALL * CH_XDWS1];  /* (33, 16) */
+    int16_t inter_prev1[N_BINS_SMALL * CH_XDWS1];  /* (33, 16) */
+
+} ulunas_state_t;
+
+/* ================================================================
+ * Function Prototypes — Basic Ops
+ * ================================================================ */
+
+/* conv2d: (Cin, Win) → (Cout, Wout), weight (Cout, Cin, Hk, Wk) */
+void conv2d_fixed(const int32_t *x, int Cin, int Win,
+                  const int16_t *weight, const int32_t *bias,
+                  int Cout, int Wout, int Hk, int Wk,
+                  int stride, int pad_w, int qr,
+                  int32_t *y);
+
+/* tconv2d: transposed conv2d */
+void tconv2d_fixed(const int32_t *x, int Cin, int Win,
+                   const int16_t *weight, const int32_t *bias,
+                   int Cout, int Wout, int Hk, int Wk,
+                   int stride, int qr,
+                   int32_t *y);
+
+/* pconv2d: point-wise conv2d (1×1), weights (Cout, Cin, 1, 1) */
+void pconv2d_fixed(const int32_t *x, int Cin, int Win,
+                   const int16_t *weight, const int32_t *bias,
+                   int Cout, int qr,
+                   int32_t *y);
+
+/* ptconv2d: point-wise transposed conv2d (1×1) */
+void ptconv2d_fixed(const int32_t *x, int Cin, int Win,
+                    const int16_t *weight, const int32_t *bias,
+                    int Cout, int qr,
+                    int32_t *y);
+
+/* gconv2d: grouped conv2d (Cin/groups channels per group) */
+void gconv2d_fixed(const int32_t *x, int Cin, int Win,
+                   const int16_t *weight, const int32_t *bias,
+                   int Cout, int Wout, int Hk, int Wk,
+                   int stride, int pad_w, int groups, int qr,
+                   int32_t *y);
+
+/* gtconv2d: grouped transposed conv2d */
+void gtconv2d_fixed(const int32_t *x, int Cin, int Win,
+                    const int16_t *weight, const int32_t *bias,
+                    int Cout, int Wout, int Hk, int Wk,
+                    int stride, int groups, int qr,
+                    int32_t *y);
+
+/* non_gconv2d: grouped conv2d without dilation (for nonTConv blocks) */
+void non_gconv2d_fixed(const int32_t *x, int Cin, int Win,
+                       const int16_t *weight, const int32_t *bias,
+                       int Cout, int Wout, int Hk, int Wk,
+                       int stride, int pad_h, int pad_w, int groups, int qr,
+                       int32_t *y);
+
+/* non_gtconv2d: grouped transposed conv2d without dilation */
+void non_gtconv2d_fixed(const int32_t *x, int Cin, int Win,
+                        const int16_t *weight, const int32_t *bias,
+                        int Cout, int Wout, int Hk, int Wk,
+                        int stride, int pad_h, int pad_w, int groups, int qr,
+                        int32_t *y);
+
+/* BatchNorm: y = ((x - mean) * var_inv)>>qr1 * weight>>qr2 + bias */
+void bn_fixed(int32_t *x, int C, int Win,
+              const uint16_t *weight, const int32_t *bias,
+              const int32_t *running_mean, const uint16_t *running_var,
+              int qr1, int qr2);
+
+/* AffinePReLU: affine transform + PReLU */
+void affine_prelu_fixed(int32_t *x, int C, int Win,
+                        const int16_t *affine_weight, const int32_t *affine_bias,
+                        const int16_t *slope_weight,
+                        int qr_affine, int qr_slope);
+
+/* PReLU: y(x<0) = x * weight >> qr */
+void prelu_fixed(int32_t *x, int C, int Win,
+                 const int16_t *weight, int qr);
+
+/* LayerNorm: computed online (mean/var from data) */
+void ln_fixed(int32_t *x, int C, int Win,
+              const int16_t *weight, const int32_t *bias, int qr);
+
+/* GRU: single time-step, (input_dim) → (hidden_dim)
+ * ⚠️ biases are int32_t: cTFA stores s16f10 (cast needed), DPRNN stores s32f20 */
+void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
+                    const int16_t *ih_weight, const int32_t *ih_bias,
+                    const int16_t *hh_weight, const int32_t *hh_bias,
+                    int16_t *y, int16_t *h_prev, int qr1, int qr2);
+
+/* GRU: full sequence (seq_len, input_dim) with shared h_prev */
+void gru_sequence_fixed(const int32_t *x, int seq_len, int input_dim, int hidden_dim,
+                        const int16_t *ih_weight, const int32_t *ih_bias,
+                        const int16_t *hh_weight, const int32_t *hh_bias,
+                        int16_t *y, int16_t *h_prev, int qr1, int qr2);
+
+/* BiGRU: bidirectional GRU for (seq_len, input_dim) */
+void bigru_fixed(const int32_t *x, int seq_len, int input_dim, int hidden_dim,
+                 const int16_t *ih_w, const int32_t *ih_b,
+                 const int16_t *hh_w, const int32_t *hh_b,
+                 const int16_t *re_ih_w, const int32_t *re_ih_b,
+                 const int16_t *re_hh_w, const int32_t *re_hh_b,
+                 int16_t *y, int qr1, int qr2);
+
+/* ================================================================
+ * Function Prototypes — UL-UNAS Specific Ops
+ * ================================================================ */
+
+/* log_gen: log10 magnitude compression, (1, 257) → s32f20 */
+void log_gen_fixed(const float *real_in, const float *imag_in,
+                   int N, int32_t *y);
+
+/* BM: Band Merging, (1, 257) → (1, 129), ERB filterbank */
+void BM_fixed(const int32_t *x, const uint16_t *weight, int32_t *y);
+
+/* BS: Band Splitting, (2, 129) → (2, 257), inverse ERB */
+void BS_fixed(const int16_t *x, const uint16_t *weight, int16_t *y);
+
+/* MASK: Complex Ratio Mask, s16f15 mask × s32f20 spec → output */
+void MASK_fixed(const int16_t *mask, const int32_t *real_in,
+                const int32_t *imag_in, int32_t *y);
+
+/* sigmoid_fixed: sigmoid on s32f20 → u16f15 */
+void sigmoid_fixed(const int32_t *x, int N, uint16_t *y);
+
+/* ================================================================
+ * Function Prototypes — cTFA Attention
+ * ================================================================ */
+
+/* cTFA_ta: Time-axis channel-wise attention (GRU single-step)
+ * ⚠️ y is uint16_t[hidden_dim] — u16f15 gate values, NOT int32!
+ * biases are int32_t (Q20 values stored as int32 in .mat files) */
+void cTFA_ta_module(const int32_t *x, int C, int W,
+                    int hidden_dim,
+                    const int16_t *ih_w, const int32_t *ih_b,
+                    const int16_t *hh_w, const int32_t *hh_b,
+                    const int16_t *fc_w, const int32_t *fc_b,
+                    int16_t *h_prev, uint16_t *y,
+                    int qr1, int qr2, int fc_shift);
+
+/* cTFA_fa: Frequency-axis channel-wise attention (BiGRU per-segment)
+ * ⚠️ Qr values VARY per module! Enc:-13,-8  De0/1:-12,-7  De3:-11,-6 */
+void cTFA_fa_module(const int32_t *x, int C, int W,
+                    const int16_t *ih_w, const int32_t *ih_b,
+                    const int16_t *hh_w, const int32_t *hh_b,
+                    const int16_t *re_ih_w, const int32_t *re_ih_b,
+                    const int16_t *re_hh_w, const int32_t *re_hh_b,
+                    const int16_t *fc_w, const int32_t *fc_b,
+                    int32_t *y,
+                    int qr1, int qr2, int fc_shift);
+
+/* cTFA apply: y = (x * ta_gate >> 15) * fa_gate >> 15
+ * ta_gate: u16f15, fa_gate: u16f15 stored as int32 */
+void cTFA_apply(const int32_t *x, const uint16_t *ta_gate,
+                const int32_t *fa_gate, int C, int W,
+                int32_t *y);
+
+/* ================================================================
+ * Function Prototypes — Encoder Sub-modules
+ * ================================================================ */
+
+/* TConv block: Temporal Conv2d + BN + AffinePReLU
+ * conv_qr: QR for conv (varies! -14 for XConv/XMB0, -13 for XDWS0)
+ * groups: >1 for grouped conv (XMB0=12, XDWS0=12, etc.) */
+void TConv_block(const int32_t *x, int32_t *conv_cache,
+                 int Cin, int Cout, int Win, int Wout,
+                 int Hk, int Wk, int stride_h, int stride_w,
+                 int cache_rows, int conv_qr, int groups,
+                 int bn_qr1, int bn_qr2,
+                 const int16_t *conv_w, const int32_t *conv_b,
+                 const uint16_t *bn_w, const int32_t *bn_b,
+                 const int32_t *bn_mean, const uint16_t *bn_var,
+                 const int16_t *affine_w, const int32_t *affine_b,
+                 const int16_t *slope_w,
+                 int32_t *y);
+
+/* PConv block: Pointwise Conv1x1 + BN + AffinePReLU */
+void PConv_block(const int32_t *x, int Cin, int Cout, int Win,
+                 const int16_t *conv_w, const int32_t *conv_b,
+                 const uint16_t *bn_w, const int32_t *bn_b,
+                 const int32_t *bn_mean, const uint16_t *bn_var,
+                 const int16_t *affine_w, const int32_t *affine_b,
+                 const int16_t *slope_w,
+                 int32_t *y);
+
+/* nonTConv block: Non-dilated grouped conv2d + BN + AffinePReLU
+ * conv_qr, bn_qr1, bn_qr2 now parameterized (were hardcoded -13, -14, -14) */
+void nonTConv_block(const int32_t *x, int Cin, int Cout, int Win, int Wout,
+                    int Hk, int Wk, int stride, int groups,
+                    int conv_qr, int bn_qr1, int bn_qr2,
+                    const int16_t *conv_w, const int32_t *conv_b,
+                    const uint16_t *bn_w, const int32_t *bn_b,
+                    const int32_t *bn_mean, const uint16_t *bn_var,
+                    const int16_t *affine_w, const int32_t *affine_b,
+                    const int16_t *slope_w,
+                    int32_t *y);
+
+/* Shuffle: interleave deinterleave */
+void shuffle_interleave(const int32_t *x, int half_C, int W, int32_t *y);
+void shuffle_deinterleave(const int32_t *x, int half_C, int W, int32_t *y);
+
+/* XConv module */
+void XConv_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
+                  int32_t *y);
+
+/* XMB0 module */
+void XMB0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
+                 int32_t *y);
+
+/* XDWS0 module */
+void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
+                  int32_t *y);
+
+/* XMB1 module */
+void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y);
+
+/* XDWS1 module */
+void XDWS1_module(const int32_t *x, int16_t *ta_h, int32_t *y);
+
+/* ================================================================
+ * Function Prototypes — Decoder Sub-modules
+ * ================================================================ */
+
+/* nonTConv_block (transposed): grouped transposed conv + BN + AffinePReLU
+ * conv_qr, bn_qr1, bn_qr2 now parameterized (were hardcoded -13, -14, -14) */
+void nonGTConv_block(const int32_t *x, int Cin, int Cout, int Win, int Wout,
+                     int Hk, int Wk, int stride, int groups,
+                     int conv_qr, int bn_qr1, int bn_qr2,
+                     const int16_t *conv_w, const int32_t *conv_b,
+                     const uint16_t *bn_w, const int32_t *bn_b,
+                     const int32_t *bn_mean, const uint16_t *bn_var,
+                     const int16_t *affine_w, const int32_t *affine_b,
+                     const int16_t *slope_w,
+                     int32_t *y);
+
+/* GTConv_block: grouped transposed conv block (for Decoder TConv blocks) */
+void GTConv_block(const int32_t *x, int32_t *conv_cache,
+                  int Cin, int Cout, int Win, int Wout,
+                  int Hk, int Wk, int stride_h, int stride_w,
+                  int cache_rows, int conv_qr, int groups,
+                  int bn_qr1, int bn_qr2,
+                  const int16_t *conv_w, const int32_t *conv_b,
+                  const uint16_t *bn_w, const int32_t *bn_b,
+                  const int32_t *bn_mean, const uint16_t *bn_var,
+                  const int16_t *affine_w, const int32_t *affine_b,
+                  const int16_t *slope_w,
+                  int32_t *y);
+
+/* De_XDWS0 module */
+void De_XDWS0_module(const int32_t *x, const int32_t *x_skip,
+                     int16_t *ta_h, int32_t *y);
+
+/* De_XMB0 module */
+void De_XMB0_module(const int32_t *x, const int32_t *x_skip,
+                    int16_t *ta_h, int32_t *y);
+
+/* De_XDWS1 module */
+void De_XDWS1_module(const int32_t *x, const int32_t *x_skip,
+                     int32_t *conv_cache, int16_t *ta_h, int32_t *y);
+
+/* De_XMB1 module */
+void De_XMB1_module(const int32_t *x, const int32_t *x_skip,
+                    int32_t *conv_cache, int16_t *ta_h, int32_t *y);
+
+/* De_XConv module */
+void De_XConv_module(const int32_t *x, const int32_t *x_skip,
+                     int32_t *conv_cache, int16_t *ta_h, int32_t *y);
+
+/* ================================================================
+ * Function Prototypes — DPRNN
+ * ================================================================ */
+
+/* Intra_RNN: BiGRU(2 groups) + FC + LN + residual */
+void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y);
+
+/* Inter_RNN: GRU(2 groups, stateful) + FC + LN + residual */
+void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t *y);
+
+/* GDPRNN: Intra-RNN → Inter-RNN */
+void GDPRNN_module(const int32_t *x, int16_t *inter_prev, int gdprnn_idx, int32_t *y);
+
+/* ================================================================
+ * Function Prototypes — High-Level Pipeline
+ * ================================================================ */
+
+/* Encoder: XConv → XMB0 → XDWS0 → XMB1 → XDWS1 */
+void Encoder_module(const int32_t *x, ulunas_state_t *state,
+                    int32_t *y_e0, int32_t *y_e1, int32_t *y_e2,
+                    int32_t *y_e3, int32_t *y_e4);
+
+/* Decoder: De_XDWS0 → De_XMB0 → De_XDWS1 → De_XMB1 → De_XConv */
+void Decoder_module(const int32_t *x, ulunas_state_t *state,
+                    const int32_t *y_e0, const int32_t *y_e1,
+                    const int32_t *y_e2, const int32_t *y_e3,
+                    const int32_t *y_e4,
+                    int32_t *y);
+
+/* Main inference: single-frame processing */
+void ulunas_infer_frame(const float *real_in, const float *imag_in,
+                        ulunas_state_t *state,
+                        const uint16_t *erbfc_w, const uint16_t *ierbfc_w,
+                        int32_t *crm_out);
+
+/* Initialize state to zero */
+void ulunas_state_init(ulunas_state_t *state);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* ULUNAS_FP_H */

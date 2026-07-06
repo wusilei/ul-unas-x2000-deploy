@@ -552,11 +552,11 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
     for (int h = 0; h < hidden_dim; h++) {
         int64_t acc_ih = 0;
         for (int i = 0; i < input_dim; i++)
-            acc_ih += (int64_t)x_t[i] * (int64_t)ih_r_w[i * s_ih + h];
+            acc_ih += (int64_t)x_t[i] * (int64_t)ih_r_w[i + input_dim * h];
         int32_t v_ih = (int32_t)((acc_ih + ((int64_t)1 << (shift_ih - 1))) >> shift_ih);
         int64_t acc_hh = 0;
         for (int i = 0; i < hidden_dim; i++)
-            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_r_w[i * s_hh + h];
+            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_r_w[i + hidden_dim * h];
         int32_t v_hh = (int32_t)((acc_hh + ((int64_t)1 << (shift_hh - 1))) >> shift_hh);
         r_t[h] = sat32((int64_t)v_ih + (int64_t)v_hh + (int64_t)ih_r_b[h] + (int64_t)hh_r_b[h]);
     }
@@ -570,11 +570,11 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
     for (int h = 0; h < hidden_dim; h++) {
         int64_t acc_ih = 0;
         for (int i = 0; i < input_dim; i++)
-            acc_ih += (int64_t)x_t[i] * (int64_t)ih_z_w[i * s_ih + h];
+            acc_ih += (int64_t)x_t[i] * (int64_t)ih_z_w[i + input_dim * h];
         int32_t v_ih = (int32_t)((acc_ih + ((int64_t)1 << (shift_ih - 1))) >> shift_ih);
         int64_t acc_hh = 0;
         for (int i = 0; i < hidden_dim; i++)
-            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_z_w[i * s_hh + h];
+            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_z_w[i + hidden_dim * h];
         int32_t v_hh = (int32_t)((acc_hh + ((int64_t)1 << (shift_hh - 1))) >> shift_hh);
         z_t[h] = sat32((int64_t)v_ih + (int64_t)v_hh + (int64_t)ih_z_b[h] + (int64_t)hh_z_b[h]);
     }
@@ -591,14 +591,14 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
         /* h_t = round(h*hh_n_w*2^qr2) + hh_n_b */
         int64_t acc_hh = 0;
         for (int i = 0; i < hidden_dim; i++)
-            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_n_w[i * s_hh + h];
+            acc_hh += (int64_t)h_prev[i] * (int64_t)hh_n_w[i + hidden_dim * h];
         int32_t h_t_val = sat32((acc_hh + ((int64_t)1 << (shift_hh - 1))) >> shift_hh);
         h_t_val = sat32((int64_t)h_t_val + (int64_t)hh_n_b[h]);
 
         /* ih_n term: round(x*ih_n_w*2^qr1) + ih_n_b */
         int64_t acc_ih = 0;
         for (int i = 0; i < input_dim; i++)
-            acc_ih += (int64_t)x_t[i] * (int64_t)ih_n_w[i * s_ih + h];
+            acc_ih += (int64_t)x_t[i] * (int64_t)ih_n_w[i + input_dim * h];
         int32_t ih_val = sat32((acc_ih + ((int64_t)1 << (shift_ih - 1))) >> shift_ih);
         ih_val = sat32((int64_t)ih_val + (int64_t)ih_n_b[h]);
 

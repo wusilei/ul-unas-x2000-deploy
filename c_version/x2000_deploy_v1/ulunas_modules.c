@@ -42,9 +42,9 @@ void XConv_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                    encoder_en_convs_0_ops_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_0_ops_4_ta_fc_weight,
                    encoder_en_convs_0_ops_4_ta_fc_bias,
-                   ta_h, ta_gate, -13, -8, -8);
+                   ta_h, ta_gate, -19, -6, -19);  /* calibrated */
 
-    /* cTFA_fa: Qr=-13,-8, fc_shift=-9 */
+    /* cTFA_fa: Qr=-17,-21, fc_shift=-8 (calibrated) */
     int32_t fa_gate[12 * 65];
     cTFA_fa_module(y_tconv, 12, 65,
                    encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,
@@ -57,7 +57,7 @@ void XConv_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                    encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_0_ops_4_fa_fc_weight,
                    encoder_en_convs_0_ops_4_fa_fc_bias,
-                   fa_gate, -13, -8, -9);
+                   fa_gate, -17, -21, -8);
 
     cTFA_apply(y_tconv, ta_gate, fa_gate, 12, 65, y);
 }
@@ -98,20 +98,20 @@ void XMB0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
       bn_fixed(y_pconv1,24,33,encoder_en_convs_1_pconv2_1_weight,encoder_en_convs_1_pconv2_1_bias,
                encoder_en_convs_1_pconv2_1_running_mean,encoder_en_convs_1_pconv2_1_running_var,-14,-14); }
 
-    /* cTFA: Qr=-13,-8, fc_shift=-8 */
+    /* cTFA: calibrated ta=-19,-13,-11 fa=-12,-5,-9 */
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
     cTFA_ta_module(y_pconv1,24,33,CTA_XMB0_HID,
                    encoder_en_convs_1_pconv2_2_ta_gru_weight_ih_l0,encoder_en_convs_1_pconv2_2_ta_gru_bias_ih_l0,
                    encoder_en_convs_1_pconv2_2_ta_gru_weight_hh_l0,encoder_en_convs_1_pconv2_2_ta_gru_bias_hh_l0,
                    encoder_en_convs_1_pconv2_2_ta_fc_weight,encoder_en_convs_1_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate,-19,-13,-11);
     cTFA_fa_module(y_pconv1,24,33,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0,encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0,encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0_reverse,encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0_reverse,encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_1_pconv2_2_fa_fc_weight,encoder_en_convs_1_pconv2_2_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate,-12,-5,-9);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[24*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,24,33,y_attn);
@@ -145,18 +145,18 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                 encoder_en_convs_2_dconv_3_slope_weight,y_tconv);
 
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
-    cTFA_ta_module(y_tconv,24,33,CTA_XMB0_HID,
+    cTFA_ta_module(y_tconv,24,33,CTA_XMB0_HID,  /* calibrated ta=-19,-3,-23 */
                    encoder_en_convs_2_dconv_4_ta_gru_weight_ih_l0,encoder_en_convs_2_dconv_4_ta_gru_bias_ih_l0,
                    encoder_en_convs_2_dconv_4_ta_gru_weight_hh_l0,encoder_en_convs_2_dconv_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_2_dconv_4_ta_fc_weight,encoder_en_convs_2_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate,-19,-3,-23);
     cTFA_fa_module(y_tconv,24,33,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_ih_l0,encoder_en_convs_2_dconv_4_fa_gru_bias_ih_l0,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_hh_l0,encoder_en_convs_2_dconv_4_fa_gru_bias_hh_l0,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_ih_l0_reverse,encoder_en_convs_2_dconv_4_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_hh_l0_reverse,encoder_en_convs_2_dconv_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_2_dconv_4_fa_fc_weight,encoder_en_convs_2_dconv_4_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate,-20,-9,-8);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,24,33,y);
@@ -204,14 +204,14 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_ih_l0,encoder_en_convs_3_pconv2_2_ta_gru_bias_ih_l0,
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_ta_gru_bias_hh_l0,
                    encoder_en_convs_3_pconv2_2_ta_fc_weight,encoder_en_convs_3_pconv2_2_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate,-5,-11,-12);  /* calibrated */
     cTFA_fa_module(y_pconv1,32,33,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_ih_l0,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0_reverse,encoder_en_convs_3_pconv2_2_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0_reverse,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_3_pconv2_2_fa_fc_weight,encoder_en_convs_3_pconv2_2_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate,-16,-21,-8);
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[32*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,32,33,y_attn);
@@ -252,14 +252,14 @@ void XDWS1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_4_dconv_4_ta_gru_weight_ih_l0,encoder_en_convs_4_dconv_4_ta_gru_bias_ih_l0,
                    encoder_en_convs_4_dconv_4_ta_gru_weight_hh_l0,encoder_en_convs_4_dconv_4_ta_gru_bias_hh_l0,
                    encoder_en_convs_4_dconv_4_ta_fc_weight,encoder_en_convs_4_dconv_4_ta_fc_bias,
-                   ta_h,ta_gate,-13,-8,-8);
+                   ta_h,ta_gate,-19,-13,-11);  /* calibrated */
     cTFA_fa_module(y_tconv,16,33,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_ih_l0,encoder_en_convs_4_dconv_4_fa_gru_bias_ih_l0,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_hh_l0,encoder_en_convs_4_dconv_4_fa_gru_bias_hh_l0,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_ih_l0_reverse,encoder_en_convs_4_dconv_4_fa_gru_bias_ih_l0_reverse,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_hh_l0_reverse,encoder_en_convs_4_dconv_4_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_4_dconv_4_fa_fc_weight,encoder_en_convs_4_dconv_4_fa_fc_bias,
-                   fa_gate,-13,-8,-9);
+                   fa_gate,-6,-19,-9);
 
     // ta_gate is now uint16, used directly
     cTFA_apply(y_tconv,ta_gate,fa_gate,16,33,y);
@@ -729,33 +729,33 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
     int16_t x0_gru[33*8], x1_gru[33*8];
 
     if (gdprnn_idx == 0) {
-        /* Calibrated 2026-07-06: intra_qr=-14,-6 (was -13,-8), +0.93dB */
+        /* Calibrated: intra_qr=-11,-4 (+1.48dB) */
         bigru_fixed(x,33,8,INTRA_GRU_HID,
             dpgrnn_0_intra_rnn_rnn1_weight_ih_l0,dpgrnn_0_intra_rnn_rnn1_bias_ih_l0,
             dpgrnn_0_intra_rnn_rnn1_weight_hh_l0,dpgrnn_0_intra_rnn_rnn1_bias_hh_l0,
             dpgrnn_0_intra_rnn_rnn1_weight_ih_l0_reverse,dpgrnn_0_intra_rnn_rnn1_bias_ih_l0_reverse,
             dpgrnn_0_intra_rnn_rnn1_weight_hh_l0_reverse,dpgrnn_0_intra_rnn_rnn1_bias_hh_l0_reverse,
-            x0_gru,-14,-6);
+            x0_gru,-11,-4);
         bigru_fixed(x+33*8,33,8,INTRA_GRU_HID,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0_reverse,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0_reverse,
-            x1_gru,-14,-6);
+            x1_gru,-11,-4);
     } else {
-        /* Calibrated 2026-07-06: intra_qr=-18,-13 (was -13,-8), +0.69dB */
+        /* Calibrated: intra_qr=-16,-12 (+1.16dB) */
         bigru_fixed(x,33,8,INTRA_GRU_HID,
             dpgrnn_1_intra_rnn_rnn1_weight_ih_l0,dpgrnn_1_intra_rnn_rnn1_bias_ih_l0,
             dpgrnn_1_intra_rnn_rnn1_weight_hh_l0,dpgrnn_1_intra_rnn_rnn1_bias_hh_l0,
             dpgrnn_1_intra_rnn_rnn1_weight_ih_l0_reverse,dpgrnn_1_intra_rnn_rnn1_bias_ih_l0_reverse,
             dpgrnn_1_intra_rnn_rnn1_weight_hh_l0_reverse,dpgrnn_1_intra_rnn_rnn1_bias_hh_l0_reverse,
-            x0_gru,-18,-13);
+            x0_gru,-16,-12);
         bigru_fixed(x+33*8,33,8,INTRA_GRU_HID,
             dpgrnn_1_intra_rnn_rnn2_weight_ih_l0,dpgrnn_1_intra_rnn_rnn2_bias_ih_l0,
             dpgrnn_1_intra_rnn_rnn2_weight_hh_l0,dpgrnn_1_intra_rnn_rnn2_bias_hh_l0,
             dpgrnn_1_intra_rnn_rnn2_weight_ih_l0_reverse,dpgrnn_1_intra_rnn_rnn2_bias_ih_l0_reverse,
             dpgrnn_1_intra_rnn_rnn2_weight_hh_l0_reverse,dpgrnn_1_intra_rnn_rnn2_bias_hh_l0_reverse,
-            x1_gru,-18,-13);
+            x1_gru,-16,-12);
     }
 
     /* Concat: (33,8)+(33,8)→(33,16) */
@@ -790,29 +790,29 @@ void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t
     int16_t x0_gru[33*8], x1_gru[33*8];
 
     if(gdprnn_idx==0){
-        /* Calibrated 2026-07-06: inter_qr=-13,-11 (was -13,-8) */
+        /* Calibrated: inter_qr=-14,-12 (+1.48dB) */
         for(int f=0;f<33;f++){
             gru_step_fixed(x+f*16,8,INTER_GRU_HID,
                 dpgrnn_0_inter_rnn_rnn1_weight_ih_l0,dpgrnn_0_inter_rnn_rnn1_bias_ih_l0,
                 dpgrnn_0_inter_rnn_rnn1_weight_hh_l0,dpgrnn_0_inter_rnn_rnn1_bias_hh_l0,
-                x0_gru+f*8,h_prev+f*16,-13,-11);}
+                x0_gru+f*8,h_prev+f*16,-14,-12);}
         for(int f=0;f<33;f++){
             gru_step_fixed(x+f*16+8,8,INTER_GRU_HID,
                 dpgrnn_0_inter_rnn_rnn2_weight_ih_l0,dpgrnn_0_inter_rnn_rnn2_bias_ih_l0,
                 dpgrnn_0_inter_rnn_rnn2_weight_hh_l0,dpgrnn_0_inter_rnn_rnn2_bias_hh_l0,
-                x1_gru+f*8,h_prev+f*16+8,-13,-11);}
+                x1_gru+f*8,h_prev+f*16+8,-14,-12);}
     }else{
-        /* Calibrated 2026-07-06: inter_qr=-16,-13 (was -13,-8) */
+        /* Calibrated: inter_qr=-11,-12 (+1.16dB) */
         for(int f=0;f<33;f++){
             gru_step_fixed(x+f*16,8,INTER_GRU_HID,
                 dpgrnn_1_inter_rnn_rnn1_weight_ih_l0,dpgrnn_1_inter_rnn_rnn1_bias_ih_l0,
                 dpgrnn_1_inter_rnn_rnn1_weight_hh_l0,dpgrnn_1_inter_rnn_rnn1_bias_hh_l0,
-                x0_gru+f*8,h_prev+f*16,-16,-13);}
+                x0_gru+f*8,h_prev+f*16,-11,-12);}
         for(int f=0;f<33;f++){
             gru_step_fixed(x+f*16+8,8,INTER_GRU_HID,
                 dpgrnn_1_inter_rnn_rnn2_weight_ih_l0,dpgrnn_1_inter_rnn_rnn2_bias_ih_l0,
                 dpgrnn_1_inter_rnn_rnn2_weight_hh_l0,dpgrnn_1_inter_rnn_rnn2_bias_hh_l0,
-                x1_gru+f*8,h_prev+f*16+8,-16,-13);}
+                x1_gru+f*8,h_prev+f*16+8,-11,-12);}
     }
 
     int16_t x_gru[33*16];

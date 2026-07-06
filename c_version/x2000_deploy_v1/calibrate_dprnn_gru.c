@@ -179,10 +179,10 @@ int main() {
 
     double best0 = -999;
     int bi1=0, bi2=0, be1=0, be2=0;
-    for (int iqr1 = -15; iqr1 <= -11; iqr1++) {
-        for (int iqr2 = -10; iqr2 <= -6; iqr2++) {
-            for (int eqr1 = -15; eqr1 <= -11; eqr1++) {
-                for (int eqr2 = -10; eqr2 <= -6; eqr2++) {
+    for (int iqr1 = -18; iqr1 <= -8; iqr1++) {
+        for (int iqr2 = -12; iqr2 <= -4; iqr2++) {
+            for (int eqr1 = -18; eqr1 <= -8; eqr1++) {
+                for (int eqr2 = -12; eqr2 <= -4; eqr2++) {
                     int16_t inter_prev[33*16] = {0};
                     int32_t r1[16*33];
                     gdprnn_cal(ge4, inter_prev, 0, iqr1, iqr2, eqr1, eqr2, r1);
@@ -212,10 +212,10 @@ int main() {
 
     double best1 = -999;
     int b2i1=0, b2i2=0, b2e1=0, b2e2=0;
-    for (int iqr1 = -15; iqr1 <= -11; iqr1++) {
-        for (int iqr2 = -10; iqr2 <= -6; iqr2++) {
-            for (int eqr1 = -15; eqr1 <= -11; eqr1++) {
-                for (int eqr2 = -10; eqr2 <= -6; eqr2++) {
+    for (int iqr1 = -18; iqr1 <= -8; iqr1++) {
+        for (int iqr2 = -12; iqr2 <= -4; iqr2++) {
+            for (int eqr1 = -18; eqr1 <= -8; eqr1++) {
+                for (int eqr2 = -12; eqr2 <= -4; eqr2++) {
                     int16_t inter_prev[33*16] = {0};
                     int32_t r2[16*33];
                     gdprnn_cal(r1_cal, inter_prev, 1, iqr1, iqr2, eqr1, eqr2, r2);

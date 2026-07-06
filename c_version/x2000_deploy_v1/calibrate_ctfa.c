@@ -220,7 +220,8 @@ int main() {
         /* Load golden files */
         int32_t *g_in = calloc(total, sizeof(int32_t));
         uint16_t *g_ta = calloc(m->C, sizeof(uint16_t));
-        uint16_t tmp_fa[4096];  /* placeholder for fa golden read */
+        /* fa golden is uint16_t[W] (per-frequency), broadcast to int32_t[C*W] */
+        uint16_t *g_fa_w = calloc(m->W, sizeof(uint16_t));
         int32_t *g_fa = calloc(total, sizeof(int32_t));
         int32_t *g_out = calloc(total, sizeof(int32_t));
         char path[256];
@@ -230,7 +231,11 @@ int main() {
         snprintf(path, sizeof(path), "dump_matlab/frame0_%s_ctfa_ta.bin", m->name);
         { FILE *f = fopen(path, "rb"); if(f) { fread(g_ta, 2, m->C, f); fclose(f); } }
         snprintf(path, sizeof(path), "dump_matlab/frame0_%s_ctfa_fa.bin", m->name);
-        { FILE *f = fopen(path, "rb"); if(f) { fread(g_fa, 4, total, f); fclose(f); } }
+        { FILE *f = fopen(path, "rb"); if(f) { fread(g_fa_w, 2, m->W, f); fclose(f); } }
+        /* Broadcast fa golden from (W,) uint16 → (C,W) int32 for comparison */
+        for (int c = 0; c < m->C; c++)
+            for (int w = 0; w < m->W; w++)
+                g_fa[c * m->W + w] = (int32_t)g_fa_w[w];
         snprintf(path, sizeof(path), "dump_matlab/frame0_%s_ctfa_out.bin", m->name);
         { FILE *f = fopen(path, "rb"); if(f) { fread(g_out, 4, total, f); fclose(f); } }
 
@@ -295,7 +300,7 @@ int main() {
                m->ta_qr1, m->ta_qr2, m->ta_fc, m->fa_qr1, m->fa_qr2, m->fa_fc,
                bta1, bta2, btfc, bfa1, bfa2, bffc);
 
-        free(g_in); free(g_ta); free(g_fa); free(g_out);
+        free(g_in); free(g_ta); free(g_fa_w); free(g_fa); free(g_out);
     }
 
     /* ================================================================

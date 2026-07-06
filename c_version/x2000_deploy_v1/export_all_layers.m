@@ -83,10 +83,14 @@ for t = 1:max_frames
     [y_e0_tconv, conv_cache_e0] = XConv_TConv_block(x_bm, conv_cache_e0);
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e0_tconv.bin'], int32(y_e0_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e0_ctfa_in.bin'], int32(y_e0_tconv));
     [y_e0_ta, tfa_cache_e0] = XConv_cTFA_ta_module(y_e0_tconv, tfa_cache_e0);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e0_ctfa_ta.bin'], uint16(y_e0_ta));
     y_e0_fa = XConv_cTFA_fa_module(y_e0_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e0_ctfa_fa.bin'], uint16(y_e0_fa));
     y_e0_t = round(y_e0_tconv .* (y_e0_ta.') * 2^(-15));
     y_e0 = round(y_e0_t .* y_e0_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e0_ctfa_out.bin'], int32(y_e0));
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e0.bin'], int32(y_e0));
 
     % --- XMB0: PConv0(12→24) → shuffle → TConv(24→24,s=2) → y_tconv (24,33) → PConv1(BN) → cTFA → y_e1 ---
@@ -119,10 +123,14 @@ for t = 1:max_frames
     [y_e2_tconv, conv_cache_e2] = XDWS0_TConv_block(y_e2_s, conv_cache_e2);
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e2_tconv.bin'], int32(y_e2_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e2_ctfa_in.bin'], int32(y_e2_tconv));
     [y_e2_ta, tfa_cache_e2] = XDWS0_cTFA_ta_module(y_e2_tconv, tfa_cache_e2);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e2_ctfa_ta.bin'], uint16(y_e2_ta));
     y_e2_fa = XDWS0_cTFA_fa_module(y_e2_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e2_ctfa_fa.bin'], uint16(y_e2_fa));
     y_e2_t = round(y_e2_tconv .* (y_e2_ta.') * 2^(-15));
     y_e2 = round(y_e2_t .* y_e2_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e2_ctfa_out.bin'], int32(y_e2));
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e2.bin'], int32(y_e2));
 
     % --- XMB1: PConv0(24→32 grouped) → shuffle → nonTConv(32→32,k=1×5) → y_tconv (32,33) → PConv1(BN) → cTFA → y_e3 ---
@@ -155,10 +163,14 @@ for t = 1:max_frames
     y_e4_tconv = XDWS1_nonTConv_block(y_e4_s);
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e4_tconv.bin'], int32(y_e4_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e4_ctfa_in.bin'], int32(y_e4_tconv));
     [y_e4_ta, tfa_cache_e4] = XDWS1_cTFA_ta_module(y_e4_tconv, tfa_cache_e4);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e4_ctfa_ta.bin'], uint16(y_e4_ta));
     y_e4_fa = XDWS1_cTFA_fa_module(y_e4_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e4_ctfa_fa.bin'], uint16(y_e4_fa));
     y_e4_t = round(y_e4_tconv .* (y_e4_ta.') * 2^(-15));
     y_e4 = round(y_e4_t .* y_e4_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e4_ctfa_out.bin'], int32(y_e4));
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e4.bin'], int32(y_e4));
 
     % ====================================================================
@@ -183,10 +195,14 @@ for t = 1:max_frames
     y_d0_tconv = De_XDWS0_nonTConv_block(y_d0_s);
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d0_tconv.bin'], int32(y_d0_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d0_ctfa_in.bin'], int32(y_d0_tconv));
     [y_d0_ta, tfa_cache_d0] = De_XDWS0_cTFA_ta_module(y_d0_tconv, tfa_cache_d0);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d0_ctfa_ta.bin'], uint16(y_d0_ta));
     y_d0_fa = De_XDWS0_cTFA_fa_module(y_d0_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d0_ctfa_fa.bin'], uint16(y_d0_fa));
     y_d0_t = round(y_d0_tconv .* (y_d0_ta.') * 2^(-15));
     y_d0 = round(y_d0_t .* y_d0_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d0_ctfa_out.bin'], int32(y_d0));
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d0.bin'], int32(y_d0));
 
     % --- De_XMB0: add(y_d0, y_e3) → PConv0 → shuffle → nonTConv(24→24,k=1×5,s=1) → PConv1 → cTFA → y_d1 ---
@@ -199,13 +215,17 @@ for t = 1:max_frames
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d1_tconv.bin'], int32(y_d1_tconv));
 
     y_d1_pconv1 = De_XMB0_PConv_block_1(y_d1_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d1_ctfa_in.bin'], int32(y_d1_pconv1));
     [y_d1_ta, tfa_cache_d1] = De_XMB0_cTFA_ta_module(y_d1_pconv1, tfa_cache_d1);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d1_ctfa_ta.bin'], uint16(y_d1_ta));
     y_d1_fa = De_XMB0_cTFA_fa_module(y_d1_pconv1);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d1_ctfa_fa.bin'], uint16(y_d1_fa));
     y_d1_t = round(y_d1_pconv1 .* (y_d1_ta.') * 2^(-15));
     y_d1_t = round(y_d1_t .* y_d1_fa * 2^(-15));
     y_d1 = zeros(24, 33);
     y_d1(1:2:end, :) = y_d1_t(1:12, :);
     y_d1(2:2:end, :) = y_d1_t(13:24, :);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d1_ctfa_out.bin'], int32(y_d1));
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d1.bin'], int32(y_d1));
 
     % --- De_XDWS1: add(y_d1, y_e2) → PConv → shuffle → GTConv(24→24,k=1×3,s=1,cache) → cTFA → y_d2 ---
@@ -217,10 +237,14 @@ for t = 1:max_frames
     [y_d2_tconv, conv_cache_d0] = De_XDWS1_TConv_block(y_d2_s, conv_cache_d0);
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d2_tconv.bin'], int32(y_d2_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d2_ctfa_in.bin'], int32(y_d2_tconv));
     [y_d2_ta, tfa_cache_d2] = De_XDWS1_cTFA_ta_module(y_d2_tconv, tfa_cache_d2);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d2_ctfa_ta.bin'], uint16(y_d2_ta));
     y_d2_fa = De_XDWS1_cTFA_fa_module(y_d2_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d2_ctfa_fa.bin'], uint16(y_d2_fa));
     y_d2_t = round(y_d2_tconv .* (y_d2_ta.') * 2^(-15));
     y_d2 = round(y_d2_t .* y_d2_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d2_ctfa_out.bin'], int32(y_d2));
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d2.bin'], int32(y_d2));
 
     % --- De_XMB1: add(y_d2, y_e1) → PConv0 → shuffle → GTConv(12→12,k=1×3,s=2,cache) → PConv1 → cTFA → y_d3 ---
@@ -233,13 +257,17 @@ for t = 1:max_frames
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d3_tconv.bin'], int32(y_d3_tconv));
 
     y_d3_pconv1 = De_XMB1_PConv_block_1(y_d3_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d3_ctfa_in.bin'], int32(y_d3_pconv1));
     [y_d3_ta, tfa_cache_d3] = De_XMB1_cTFA_ta_module(y_d3_pconv1, tfa_cache_d3);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d3_ctfa_ta.bin'], uint16(y_d3_ta));
     y_d3_fa = De_XMB1_cTFA_fa_module(y_d3_pconv1);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d3_ctfa_fa.bin'], uint16(y_d3_fa));
     y_d3_t = round(y_d3_pconv1 .* (y_d3_ta.') * 2^(-15));
     y_d3_t = round(y_d3_t .* y_d3_fa * 2^(-15));
     y_d3 = zeros(12, 65);
     y_d3(1:2:end, :) = y_d3_t(1:6, :);
     y_d3(2:2:end, :) = y_d3_t(7:12, :);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d3_ctfa_out.bin'], int32(y_d3));
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d3.bin'], int32(y_d3));
 
     % --- De_XConv: add(y_d3, y_e0) → GTConv(12→1,k=3×3,s=2,cache,3D) → cTFA → y_dec ---
@@ -247,10 +275,14 @@ for t = 1:max_frames
     [y_d4_tconv, conv_cache_d2] = De_XConv_TConv_block(x_cat_d4, conv_cache_d2);
     write_bin([out_dir 'frame' num2str(t-1) '_dec_d4_tconv.bin'], int32(y_d4_tconv));
 
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d4_ctfa_in.bin'], int32(y_d4_tconv));
     [y_d4_ta, tfa_cache_d4] = De_XConv_cTFA_ta_module(y_d4_tconv, tfa_cache_d4);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d4_ctfa_ta.bin'], uint16(y_d4_ta));
     y_d4_fa = De_XConv_cTFA_fa_module(y_d4_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d4_ctfa_fa.bin'], uint16(y_d4_fa));
     y_d4_t = round(y_d4_tconv .* (y_d4_ta.') * 2^(-15));
     y_dec = round(y_d4_t .* y_d4_fa * 2^(-15));
+    write_bin([out_dir 'frame' num2str(t-1) '_dec_d4_ctfa_out.bin'], int32(y_dec));
 
     % Sigmoid
     y_dec_dq = y_dec * 2^(-20);

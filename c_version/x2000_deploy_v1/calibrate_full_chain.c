@@ -244,6 +244,29 @@ int main(int argc, char **argv) {
     }
 
     /* ================================================================
+     * Encoder cTFA calibration (forward: e0→e4)
+     * ================================================================ */
+    if (!strcmp(mode, "encoder") || !strcmp(mode, "all")) {
+        printf("=== Encoder cTFA (e0→e4 forward) ===\n\n");
+
+        ctfa_qr_t *enc_qrs[] = {&g_qr_e0, &g_qr_e1, &g_qr_e2, &g_qr_e3, &g_qr_e4};
+        const char *enc_names[] = {"E0","E1","E2","E3","E4"};
+
+        for (int m = 0; m < 5; m++) {
+            double base;
+            double best = search_ctfa_6d_multi(enc_qrs[m],
+                rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &base);
+            double d;
+            eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &d);
+            printf("#define %-4s_TA %3d, %3d, %3d\n", enc_names[m],
+                   enc_qrs[m]->ta_qr1, enc_qrs[m]->ta_qr2, enc_qrs[m]->ta_fc);
+            printf("#define %-4s_FA %3d, %3d, %3d\n", enc_names[m],
+                   enc_qrs[m]->fa_qr1, enc_qrs[m]->fa_qr2, enc_qrs[m]->fa_fc);
+            printf("  SNR: %.2f dB (Δ=%+.2f)  dec=%.2f\n\n", best, best - base, d);
+        }
+    }
+
+    /* ================================================================
      * d4 TConv QR calibration (joint with d4 cTFA)
      * ================================================================ */
     if (!strcmp(mode, "d4") || !strcmp(mode, "all")) {
@@ -290,6 +313,16 @@ int main(int argc, char **argv) {
     printf("#define D3_FA %d, %d, %d\n", g_qr_d3.fa_qr1, g_qr_d3.fa_qr2, g_qr_d3.fa_fc);
     printf("#define D4_TA %d, %d, %d\n", g_qr_d4.ta_qr1, g_qr_d4.ta_qr2, g_qr_d4.ta_fc);
     printf("#define D4_FA %d, %d, %d\n", g_qr_d4.fa_qr1, g_qr_d4.fa_qr2, g_qr_d4.fa_fc);
+    printf("#define E0_TA %d, %d, %d\n", g_qr_e0.ta_qr1, g_qr_e0.ta_qr2, g_qr_e0.ta_fc);
+    printf("#define E0_FA %d, %d, %d\n", g_qr_e0.fa_qr1, g_qr_e0.fa_qr2, g_qr_e0.fa_fc);
+    printf("#define E1_TA %d, %d, %d\n", g_qr_e1.ta_qr1, g_qr_e1.ta_qr2, g_qr_e1.ta_fc);
+    printf("#define E1_FA %d, %d, %d\n", g_qr_e1.fa_qr1, g_qr_e1.fa_qr2, g_qr_e1.fa_fc);
+    printf("#define E2_TA %d, %d, %d\n", g_qr_e2.ta_qr1, g_qr_e2.ta_qr2, g_qr_e2.ta_fc);
+    printf("#define E2_FA %d, %d, %d\n", g_qr_e2.fa_qr1, g_qr_e2.fa_qr2, g_qr_e2.fa_fc);
+    printf("#define E3_TA %d, %d, %d\n", g_qr_e3.ta_qr1, g_qr_e3.ta_qr2, g_qr_e3.ta_fc);
+    printf("#define E3_FA %d, %d, %d\n", g_qr_e3.fa_qr1, g_qr_e3.fa_qr2, g_qr_e3.fa_fc);
+    printf("#define E4_TA %d, %d, %d\n", g_qr_e4.ta_qr1, g_qr_e4.ta_qr2, g_qr_e4.ta_fc);
+    printf("#define E4_FA %d, %d, %d\n", g_qr_e4.fa_qr1, g_qr_e4.fa_qr2, g_qr_e4.fa_fc);
     printf("#define D4_TCONV_CQR %d\n", g_d4_tconv.conv_qr);
     printf("#define D4_TCONV_BN1 %d\n", g_d4_tconv.bn_qr1);
     printf("#define D4_TCONV_BN2 %d\n", g_d4_tconv.bn_qr2);

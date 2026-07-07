@@ -1046,13 +1046,10 @@ void TConv_block(const int32_t *x, int32_t *conv_cache,
 
         for (int co_l = 0; co_l < Cout_pg; co_l++) {
             int co = co_off + co_l;
-            for (int wo = 0; wo < Wout; wo++)
-                y_conv[co * Wout + wo] = conv_b[co];
-
-            for (int ci_l = 0; ci_l < Cin_pg; ci_l++) {
-                int ci = ci_off + ci_l;
-                for (int wo = 0; wo < Wout; wo++) {
-                    int64_t acc = 0;
+            for (int wo = 0; wo < Wout; wo++) {
+                int64_t acc = 0;  /* accumulate @ Q33 across all input channels */
+                for (int ci_l = 0; ci_l < Cin_pg; ci_l++) {
+                    int ci = ci_off + ci_l;
                     for (int hk = 0; hk < Hk; hk++) {
                         int hi = hk - pad_h;
                         if (hi < 0 || hi >= H_in) continue;
@@ -1061,13 +1058,12 @@ void TConv_block(const int32_t *x, int32_t *conv_cache,
                             if (wi < 0 || wi >= Win) continue;
                             int32_t xv = x_full[(hi * Cin + ci) * Win + wi];
                             int kidx = w_off + ((co_l * Cin_pg + ci_l) * Hk + hk) * Wk + wk;
-                            int64_t prod = (int64_t)xv * (int64_t)conv_w[kidx];
-                            prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                            acc += prod;
+                            acc += (int64_t)xv * (int64_t)conv_w[kidx];
                         }
                     }
-                    y_conv[co * Wout + wo] = sat32((int64_t)y_conv[co * Wout + wo] + acc);
                 }
+                y_conv[co * Wout + wo] = sat32((int64_t)conv_b[co] +
+                    ((acc + ((int64_t)1 << (shift - 1))) >> shift));
             }
         }
     }
@@ -1214,13 +1210,10 @@ void GTConv_block(const int32_t *x, int32_t *conv_cache,
 
         for (int co_l = 0; co_l < Cout_pg; co_l++) {
             int co = co_off + co_l;
-            for (int wo = 0; wo < Wout; wo++)
-                y_conv[co * Wout + wo] = conv_b[co];
-
-            for (int ci_l = 0; ci_l < Cin_pg; ci_l++) {
-                int ci = ci_off + ci_l;
-                for (int wo = 0; wo < Wout; wo++) {
-                    int64_t acc = 0;
+            for (int wo = 0; wo < Wout; wo++) {
+                int64_t acc = 0;  /* accumulate @ Q33 across all input channels */
+                for (int ci_l = 0; ci_l < Cin_pg; ci_l++) {
+                    int ci = ci_off + ci_l;
                     for (int hk = 0; hk < Hk; hk++) {
                         int hi = hk - pad_h;
                         if (hi < 0 || hi >= H_in) continue;
@@ -1229,13 +1222,12 @@ void GTConv_block(const int32_t *x, int32_t *conv_cache,
                             if (wi < 0 || wi >= Win) continue;
                             int32_t xv = x_full[(hi * Cin + ci) * Win + wi];
                             int kidx = w_off + ((co_l * Cin_pg + ci_l) * Hk + hk) * Wk + wk;
-                            int64_t prod = (int64_t)xv * (int64_t)conv_w[kidx];
-                            prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                            acc += prod;
+                            acc += (int64_t)xv * (int64_t)conv_w[kidx];
                         }
                     }
-                    y_conv[co * Wout + wo] = sat32((int64_t)y_conv[co * Wout + wo] + acc);
                 }
+                y_conv[co * Wout + wo] = sat32((int64_t)conv_b[co] +
+                    ((acc + ((int64_t)1 << (shift - 1))) >> shift));
             }
         }
     }

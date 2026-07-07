@@ -579,27 +579,30 @@ void affineprelu_func(const int32_t *x, const int16_t *weight, const int32_t *bi
     int64_t r2 = ((int64_t)1 << (shift2 - 1));
     int N = C * W;
 
-    /* Process each element */
+    /* Process each element.
+     * weight/bias are [C,W] stored column-major: weight[c + C*w], bias[c + C*w] */
     for (int i = 0; i < N; i++) {
         int32_t x_orig = x[i];
         int32_t x_mod = x_orig;
         int c = i / W;
+        int w = i % W;
+        int cm_idx = c + C * w;  /* column-major linear index for [C,W] */
 
-        /* PReLU: negative part gets multiplied by slope */
+        /* PReLU: negative part gets multiplied by slope (per-channel, 1D) */
         if (x_orig < 0) {
             int64_t prod = (int64_t)x_orig * slope[c];
             if (prod >= 0) x_mod = (int32_t)((prod + r1) >> shift1);
             else           x_mod = (int32_t)((prod - r1) >> shift1);
         }
 
-        /* Affine: round(x_copy * weight * 2^Qr2) */
-        int64_t aff = (int64_t)x_orig * weight[i];
+        /* Affine: round(x_copy * weight * 2^Qr2) — weight is [C,W] col-major */
+        int64_t aff = (int64_t)x_orig * weight[cm_idx];
         int32_t aff_rounded;
         if (aff >= 0) aff_rounded = (int32_t)((aff + r2) >> shift2);
         else          aff_rounded = (int32_t)((aff - r2) >> shift2);
 
-        /* y = affine + bias + x_mod (residual) */
-        y[i] = sat_i32((int64_t)aff_rounded + bias[c] + x_mod);
+        /* y = affine + bias + x_mod (residual) — bias is [C,W] col-major */
+        y[i] = sat_i32((int64_t)aff_rounded + bias[cm_idx] + x_mod);
     }
 }
 

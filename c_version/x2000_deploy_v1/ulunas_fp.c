@@ -26,25 +26,23 @@ void conv2d_fixed(const int32_t *x, int Cin, int Win,
                   int stride, int pad_w, int qr,
                   int32_t *y) {
     int Hout = 1;
+    int shift = -qr;
     for (int co = 0; co < Cout; co++) {
-        for (int w = 0; w < Wout; w++) y[co * Wout + w] = bias[co];
-        for (int ci = 0; ci < Cin; ci++) {
-            const int32_t *x_chan = x + ci * Win;
-            for (int wo = 0; wo < Wout; wo++) {
-                int64_t acc = 0;
+        for (int wo = 0; wo < Wout; wo++) {
+            int64_t acc = 0;  /* accumulate @ Q33, bias+shift at end (MATLAB order) */
+            for (int ci = 0; ci < Cin; ci++) {
+                const int32_t *x_chan = x + ci * Win;
                 for (int hk = 0; hk < Hk; hk++) {
                     for (int wk = 0; wk < Wk; wk++) {
                         int wi = wo * stride + wk - pad_w;
                         int32_t x_val = (wi >= 0 && wi < Win) ? x_chan[wi] : 0;
                         int kidx = ((co * Cin + ci) * Hk + hk) * Wk + wk;
-                        int64_t prod = (int64_t)x_val * (int64_t)weight[kidx];
-                        int shift = -qr;
-                        prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                        acc += prod;
+                        acc += (int64_t)x_val * (int64_t)weight[kidx];
                     }
                 }
-                y[co * Wout + wo] = sat32((int64_t)y[co * Wout + wo] + acc);
             }
+            y[co * Wout + wo] = sat32((int64_t)bias[co] +
+                ((acc + ((int64_t)1 << (shift - 1))) >> shift));
         }
     }
 }
@@ -62,30 +60,28 @@ void tconv2d_fixed(const int32_t *x, int Cin, int Win,
     int pad_w = 2;
     int W_insert = Win + (Win - 1) * (stride - 1);
     int W_padded = W_insert + 2 * pad_w;
+    int shift = -qr;
 
     for (int co = 0; co < Cout; co++) {
-        for (int w = 0; w < Wout; w++) y[co * Wout + w] = bias[co];
-        for (int ci = 0; ci < Cin; ci++) {
-            const int32_t *x_chan = x + ci * Win;
-            int32_t *x_insert = (int32_t *)calloc(W_padded, sizeof(int32_t));
-            for (int w = 0; w < Win; w++) x_insert[pad_w + w * stride] = x_chan[w];
-            for (int wo = 0; wo < Wout; wo++) {
-                int64_t acc = 0;
+        for (int wo = 0; wo < Wout; wo++) {
+            int64_t acc = 0;  /* accumulate @ Q33 */
+            for (int ci = 0; ci < Cin; ci++) {
+                const int32_t *x_chan = x + ci * Win;
+                int32_t *x_insert = (int32_t *)calloc(W_padded, sizeof(int32_t));
+                for (int w = 0; w < Win; w++) x_insert[pad_w + w * stride] = x_chan[w];
                 for (int hk = 0; hk < Hk; hk++) {
                     for (int wk = 0; wk < Wk; wk++) {
                         int wi = wo + wk;
                         int32_t xv = (wi >= 0 && wi < W_padded) ? x_insert[wi] : 0;
                         int wk_rev = Wk - 1 - wk;
                         int kidx = ((ci * Cout + co) * Hk + hk) * Wk + wk_rev;
-                        int64_t prod = (int64_t)xv * (int64_t)weight[kidx];
-                        int shift = -qr;
-                        prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                        acc += prod;
+                        acc += (int64_t)xv * (int64_t)weight[kidx];
                     }
                 }
-                y[co * Wout + wo] = sat32((int64_t)y[co * Wout + wo] + acc);
+                free(x_insert);
             }
-            free(x_insert);
+            y[co * Wout + wo] = sat32((int64_t)bias[co] +
+                ((acc + ((int64_t)1 << (shift - 1))) >> shift));
         }
     }
 }

@@ -135,13 +135,18 @@ for t = 1:max_frames
 
     % --- XMB1: PConv0(24→32 grouped) → shuffle → nonTConv(32→32,k=1×5) → y_tconv (32,33) → PConv1(BN) → cTFA → y_e3 ---
     y_e3_pconv0 = XMB1_PConv_block_0(y_e2);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_pconv0.bin'], int32(y_e3_pconv0));
+
     y_e3_s = zeros(32, 33);
     y_e3_s(1:2:end, :) = y_e3_pconv0(1:16, :);
     y_e3_s(2:2:end, :) = y_e3_pconv0(17:32, :);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_shuf.bin'], int32(y_e3_s));
+
     y_e3_tconv = XMB1_nonTConv_block(y_e3_s);
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_tconv.bin'], int32(y_e3_tconv));
 
     y_e3_pconv1 = XMB1_PConv_block_1(y_e3_tconv);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_pconv1.bin'], int32(y_e3_pconv1));
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_ctfa_in.bin'], int32(y_e3_pconv1));  % cTFA input
     [y_e3_ta, tfa_cache_e3] = XMB1_cTFA_ta_module(y_e3_pconv1, tfa_cache_e3);
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_ctfa_ta.bin'], uint16(y_e3_ta));     % ta gate

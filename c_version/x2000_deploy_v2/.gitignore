@@ -1,0 +1,12 @@
+# Build artifacts
+*.o
+test_matlab_golden
+test_matlab_golden_asan
+ulunas_infer_test
+build/
+
+# Golden dump data (large binary test files)
+dump_matlab/
+
+# MATLAB generated temp files
+*.asv

@@ -428,20 +428,22 @@ void bn_fixed(int32_t *x, int C, int Win,
  * ================================================================
  * Matches affineprelu_func.m:
  *   1. For x < 0: x_neg = round(x * slope[c] * 2^qr_slope)
- *   2. y = round(x_orig * weight[c] * 2^qr_affine) + bias[c] + x_neg
+ *   2. y = round(x_orig * weight[c,w] * 2^qr_affine) + bias[c,w] + x_neg
+ *
+ * weight/bias: (C, Win) per-element  (NOT per-channel!)
+ * slope:       (C,)     per-channel
  */
 void affine_prelu_fixed(int32_t *x, int C, int Win,
                         const int16_t *affine_weight, const int32_t *affine_bias,
                         const int16_t *slope_weight,
                         int qr_affine, int qr_slope) {
-    /* slope_weight is per-channel (C elements) */
     for (int c = 0; c < C; c++) {
         int32_t *ch = x + c * Win;
-        int16_t wt = affine_weight[c];
-        int32_t bias_c = affine_bias[c];
-        int16_t slope = slope_weight[c];
+        int16_t slope = slope_weight[c];  /* per-channel */
         for (int w = 0; w < Win; w++) {
             int32_t x_orig = ch[w];
+            int16_t wt = affine_weight[c * Win + w];   /* per-element */
+            int32_t bias_c = affine_bias[c * Win + w];  /* per-element */
             /* MATLAB: x_mod = (x<0) ? round(x*slope*2^qr_slope) : x */
             int32_t x_mod;
             if (x_orig < 0) {

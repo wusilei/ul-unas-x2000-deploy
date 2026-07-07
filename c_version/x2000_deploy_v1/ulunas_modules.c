@@ -872,6 +872,12 @@ void Decoder_module(const int32_t *x, ulunas_state_t *state,
 void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
     int16_t x0_gru[33*8], x1_gru[33*8];
 
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_intra_in.bin","wb"); fwrite(x,4,33*16,f); fclose(f); }
+    }
+#endif
+
     if (gdprnn_idx == 0) {
         int qr1 = GRU0_INTRA_QR1, qr2 = GRU0_INTRA_QR2;
         bigru_fixed(x,33,8,INTRA_GRU_HID,
@@ -880,12 +886,18 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
             dpgrnn_0_intra_rnn_rnn1_weight_ih_l0_reverse,dpgrnn_0_intra_rnn_rnn1_bias_ih_l0_reverse,
             dpgrnn_0_intra_rnn_rnn1_weight_hh_l0_reverse,dpgrnn_0_intra_rnn_rnn1_bias_hh_l0_reverse,
             x0_gru,qr1,qr2);
+#ifdef DIAG_RNN
+        { FILE *f=fopen("diag_rnn1_intra_gru0.bin","wb"); fwrite(x0_gru,2,33*8,f); fclose(f); }
+#endif
         bigru_fixed(x+33*8,33,8,INTRA_GRU_HID,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0_reverse,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0_reverse,
             x1_gru,qr1,qr2);
+#ifdef DIAG_RNN
+        { FILE *f=fopen("diag_rnn1_intra_gru1.bin","wb"); fwrite(x1_gru,2,33*8,f); fclose(f); }
+#endif
     } else {
         int qr1 = GRU1_INTRA_QR1, qr2 = GRU1_INTRA_QR2;
         bigru_fixed(x,33,8,INTRA_GRU_HID,
@@ -905,6 +917,11 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
     /* Concat: (33,8)+(33,8)→(33,16) */
     int16_t x_gru[33*16];
     for(int f=0;f<33;f++){for(int h=0;h<8;h++){x_gru[f*16+h]=x0_gru[f*8+h];x_gru[f*16+8+h]=x1_gru[f*8+h];}}
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_intra_cat.bin","wb"); fwrite(x_gru,2,33*16,f); fclose(f); }
+    }
+#endif
 
     /* FC: (16→16), Qr=-9 */
     const int16_t *fc_w=(gdprnn_idx==0)?dpgrnn_0_intra_fc_weight:dpgrnn_1_intra_fc_weight;
@@ -913,15 +930,30 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
     for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=fc_b[o];
       for(int i=0;i<16;i++)acc+=(int64_t)x_gru[f*16+i]*(int64_t)fc_w[o*16+i];
       x_fc[f*16+o]=sat32((acc+((int64_t)1<<8))>>9);}}
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_intra_fc.bin","wb"); fwrite(x_fc,4,33*16,f); fclose(f); }
+    }
+#endif
 
     /* LN: Qr=-14 */
     const int16_t *ln_w=(gdprnn_idx==0)?dpgrnn_0_intra_ln_weight:dpgrnn_1_intra_ln_weight;
     const int32_t *ln_b=(gdprnn_idx==0)?dpgrnn_0_intra_ln_bias:dpgrnn_1_intra_ln_bias;
     int32_t x_ln[33*16]; memcpy(x_ln,x_fc,33*16*sizeof(int32_t));
     ln_fixed(x_ln,16,33,ln_w,ln_b,-14);
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_intra_ln.bin","wb"); fwrite(x_ln,4,33*16,f); fclose(f); }
+    }
+#endif
 
     /* Residual: y = x + x_ln */
     for(int i=0;i<33*16;i++)y[i]=sat32((int64_t)x[i]+(int64_t)x_ln[i]);
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_intra_out.bin","wb"); fwrite(y,4,33*16,f); fclose(f); }
+    }
+#endif
 }
 
 /* ================================================================
@@ -933,6 +965,12 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
 void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t *y) {
     int16_t x0_gru[33*8], x1_gru[33*8];
 
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_inter_in.bin","wb"); fwrite(x,4,33*16,f); fclose(f); }
+    }
+#endif
+
     if(gdprnn_idx==0){
         int qr1 = GRU0_INTER_QR1, qr2 = GRU0_INTER_QR2;
         for(int f=0;f<33;f++){
@@ -940,11 +978,17 @@ void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t
                 dpgrnn_0_inter_rnn_rnn1_weight_ih_l0,dpgrnn_0_inter_rnn_rnn1_bias_ih_l0,
                 dpgrnn_0_inter_rnn_rnn1_weight_hh_l0,dpgrnn_0_inter_rnn_rnn1_bias_hh_l0,
                 x0_gru+f*8,h_prev+f*16,qr1,qr2);}
+#ifdef DIAG_RNN
+        { FILE *f=fopen("diag_rnn1_inter_gru0.bin","wb"); fwrite(x0_gru,2,33*8,f); fclose(f); }
+#endif
         for(int f=0;f<33;f++){
             gru_step_fixed(x+f*16+8,8,INTER_GRU_HID,
                 dpgrnn_0_inter_rnn_rnn2_weight_ih_l0,dpgrnn_0_inter_rnn_rnn2_bias_ih_l0,
                 dpgrnn_0_inter_rnn_rnn2_weight_hh_l0,dpgrnn_0_inter_rnn_rnn2_bias_hh_l0,
                 x1_gru+f*8,h_prev+f*16+8,qr1,qr2);}
+#ifdef DIAG_RNN
+        { FILE *f=fopen("diag_rnn1_inter_gru1.bin","wb"); fwrite(x1_gru,2,33*8,f); fclose(f); }
+#endif
     }else{
         int qr1 = GRU1_INTER_QR1, qr2 = GRU1_INTER_QR2;
         for(int f=0;f<33;f++){
@@ -961,6 +1005,11 @@ void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t
 
     int16_t x_gru[33*16];
     for(int f=0;f<33;f++){for(int h=0;h<8;h++){x_gru[f*16+h]=x0_gru[f*8+h];x_gru[f*16+8+h]=x1_gru[f*8+h];}}
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_inter_cat.bin","wb"); fwrite(x_gru,2,33*16,f); fclose(f); }
+    }
+#endif
 
     const int16_t *fc_w=(gdprnn_idx==0)?dpgrnn_0_inter_fc_weight:dpgrnn_1_inter_fc_weight;
     const int32_t *fc_b=(gdprnn_idx==0)?dpgrnn_0_inter_fc_bias:dpgrnn_1_inter_fc_bias;
@@ -968,13 +1017,28 @@ void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t
     for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=fc_b[o];
       for(int i=0;i<16;i++)acc+=(int64_t)x_gru[f*16+i]*(int64_t)fc_w[o*16+i];
       x_fc[f*16+o]=sat32((acc+((int64_t)1<<8))>>9);}}
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_inter_fc.bin","wb"); fwrite(x_fc,4,33*16,f); fclose(f); }
+    }
+#endif
 
     const int16_t *ln_w=(gdprnn_idx==0)?dpgrnn_0_inter_ln_weight:dpgrnn_1_inter_ln_weight;
     const int32_t *ln_b=(gdprnn_idx==0)?dpgrnn_0_inter_ln_bias:dpgrnn_1_inter_ln_bias;
     int32_t x_ln[33*16]; memcpy(x_ln,x_fc,33*16*sizeof(int32_t));
     ln_fixed(x_ln,16,33,ln_w,ln_b,-13);
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_inter_ln.bin","wb"); fwrite(x_ln,4,33*16,f); fclose(f); }
+    }
+#endif
 
     for(int i=0;i<33*16;i++)y[i]=sat32((int64_t)x[i]+(int64_t)x_ln[i]);
+#ifdef DIAG_RNN
+    if (gdprnn_idx == 0) {
+        { FILE *f=fopen("diag_rnn1_inter_out.bin","wb"); fwrite(y,4,33*16,f); fclose(f); }
+    }
+#endif
 }
 
 /* ================================================================

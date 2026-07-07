@@ -32,12 +32,24 @@ static double snr_db(const int32_t *g, const int32_t *t, int n) {
 }
 static const char *ok(double s){return s>120?"PERFECT":s>80?"PASS":s>40?"WARN":"FAIL";}
 
+/* SNR for 2D layers: transpose golden from MATLAB col-major (W,C) to C row-major (C,W) */
+static double snr_db_2d(const int32_t *golden_wc, const int32_t *c_out_cw, int C, int W) {
+    int n = C * W;
+    int32_t *gT = malloc(n * sizeof(int32_t));
+    for (int c = 0; c < C; c++)
+        for (int w = 0; w < W; w++)
+            gT[c * W + w] = golden_wc[c + C * w];  /* col-major (C,W) → row-major (C,W) */
+    double s = snr_db(gT, c_out_cw, n);
+    free(gT);
+    return s;
+}
+
 int main(int argc, char **argv) {
     const char *dir = argc>1?argv[1]:"dump_matlab/";
     char p[512];
     int tested=0,passed=0;
 
-    printf("=== UL-UNAS Layer SNR ===\n\n");
+    printf("=== UL-UNAS Layer SNR (golden col-major → transposed) ===\n\n");
 
     for(int f=0;f<5;f++){
         /* Load STFT input */
@@ -66,11 +78,12 @@ int main(int argc, char **argv) {
 
         const char *en[]={"enc_e0","enc_e1","enc_e2","enc_e3","enc_e4"};
         int32_t *eo[]={e0,e1,e2,e3,e4};
-        int el[]={12*65,24*33,24*33,32*33,16*33};
+        int eC[]={12,24,24,32,16};
+        int eW[]={65,33,33,33,33};
         for(int s=0;s<5;s++){
             snprintf(p,sizeof(p),"%s/frame%d_%s.bin",dir,f,en[s]);
-            int32_t *g=load_int32(p,el[s]);
-            if(g){double sn=snr_db(g,eo[s],el[s]);printf("  %-7s: SNR=%7.2f dB [%s]\n",en[s],sn,ok(sn));tested++;if(sn>80)passed++;free(g);}
+            int32_t *g=load_int32(p,eC[s]*eW[s]);
+            if(g){double sn=snr_db_2d(g,eo[s],eC[s],eW[s]);printf("  %-7s: SNR=%7.2f dB [%s]\n",en[s],sn,ok(sn));tested++;if(sn>80)passed++;free(g);}
             else printf("  %-7s: SKIP\n",en[s]);
         }
 
@@ -80,10 +93,10 @@ int main(int argc, char **argv) {
         GDPRNN_module(r1,st.inter_prev1,1,r2);
         snprintf(p,sizeof(p),"%s/frame%d_rnn1.bin",dir,f);
         int32_t *gr1=load_int32(p,16*33);
-        if(gr1){double sn=snr_db(gr1,r1,528);printf("  rnn1    : SNR=%7.2f dB [%s]\n",sn,ok(sn));tested++;if(sn>80)passed++;free(gr1);}
+        if(gr1){double sn=snr_db_2d(gr1,r1,16,33);printf("  rnn1    : SNR=%7.2f dB [%s]\n",sn,ok(sn));tested++;if(sn>80)passed++;free(gr1);}
         snprintf(p,sizeof(p),"%s/frame%d_rnn2.bin",dir,f);
         int32_t *gr2=load_int32(p,16*33);
-        if(gr2){double sn=snr_db(gr2,r2,528);printf("  rnn2    : SNR=%7.2f dB [%s]\n",sn,ok(sn));tested++;if(sn>80)passed++;free(gr2);}
+        if(gr2){double sn=snr_db_2d(gr2,r2,16,33);printf("  rnn2    : SNR=%7.2f dB [%s]\n",sn,ok(sn));tested++;if(sn>80)passed++;free(gr2);}
 
         /* Decoder */
         int32_t y_dec[1*129];

@@ -60,7 +60,7 @@ inter_cache_0 = zeros(33, 16);
 inter_cache_1 = zeros(33, 16);
 
 % Process first few frames and dump intermediate tensors
-max_frames = min(T, 5);
+max_frames = min(T, 20);  % increased for speech frame coverage
 for t = 1:max_frames
     fprintf('Frame %d/%d\n', t, max_frames);
 

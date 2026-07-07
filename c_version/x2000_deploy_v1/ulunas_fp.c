@@ -873,15 +873,16 @@ void cTFA_ta_module(const int32_t *x, int C, int W,
 
     /* FC: (nHidden,) → (C,) per output channel
      * MATLAB: x_fc = round(gru * fc_w * 2^(fc_shift)) + fc_b
-     * gru (1, nHidden) × fc_w (nHidden, C) = (1, C)
-     * MATLAB col-major: fc_w(h, c) = fc_w[h + hidden_dim * c] */
+     * Use double accumulation to match MATLAB 53-bit mantissa (vs int64 63-bit).
+     * Reduces sigmoid-amplified error at decoder output. */
     int shift = -fc_shift;
+    double scale = 1.0 / (double)(1 << (-fc_shift));  /* 2^fc_shift for double path */
     for (int c = 0; c < C; c++) {
-        int64_t acc = 0;  /* Bug #4: bias must be added AFTER shift */
+        double acc_d = 0.0;
         for (int h = 0; h < hidden_dim; h++) {
-            acc += (int64_t)gru_out[h] * (int64_t)fc_w[h + hidden_dim * c];
+            acc_d += (double)gru_out[h] * (double)fc_w[h + hidden_dim * c];
         }
-        int32_t v = (int32_t)((acc + ((int64_t)1 << (shift - 1))) >> shift);
+        int32_t v = (int32_t)round(acc_d * scale);
         int32_t fc_val = sat32((int64_t)v + (int64_t)fc_b[c]);
         y[c] = U2Q15(sigmoidf_fp(Q20_TO_F(fc_val)));
     }
@@ -942,14 +943,15 @@ void cTFA_fa_module(const int32_t *x, int C, int W,
      * x_fc(s, out) uses bias[out] + weight[h,out]*x_gru(s,h) for ALL s.
      * fc_out[d*seg_len+s] = x_fc(s, d) → uses fc_b[d], fc_w[d*8+h] */
     int shift = -fc_shift;
+    double scale = 1.0 / (double)(1 << (-fc_shift));  /* 2^fc_shift for double path */
     int32_t fc_out[CTA_FA_SEG * 4];
     for (int d = 0; d < 4; d++) {
         for (int s = 0; s < seg_len; s++) {
-            int64_t acc = 0;  /* Bug #4: bias must be added AFTER shift */
+            double acc_d = 0.0;
             for (int h = 0; h < 8; h++) {
-                acc += (int64_t)gru_out[s * 8 + h] * (int64_t)fc_w[d * 8 + h];
+                acc_d += (double)gru_out[s * 8 + h] * (double)fc_w[d * 8 + h];
             }
-            int32_t v = (int32_t)((acc + ((int64_t)1 << (shift - 1))) >> shift);
+            int32_t v = (int32_t)round(acc_d * scale);
             fc_out[d * seg_len + s] = sat32((int64_t)v + (int64_t)fc_b[d]);
         }
     }

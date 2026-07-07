@@ -1000,12 +1000,13 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
     memcpy(x_pad, x_agg, W * sizeof(int32_t));
     memset(x_pad + W, 0, pad_len * sizeof(int32_t));
 
-    /* Reshape to [seg][group]: MATLAB x_t = reshape(x_pad, [group, seg])' */
-    /* So x_t is [seg][group] */
+    /* Reshape to [seg][group]: MATLAB x_t = reshape(x_pad, [group, seg])'
+     * Column-major reshape: [group×seg] filled as x_pad[g + group*s]
+     * Then transpose: x_t[s][g] = x_pad[g + group*s] */
     int32_t x_reshaped[68 * 4];  /* [seg][group] */
     for (int s = 0; s < seg; s++) {
         for (int g = 0; g < group; g++) {
-            x_reshaped[s * group + g] = x_pad[g * seg + s];  /* MATLAB reshape then transpose */
+            x_reshaped[s * group + g] = x_pad[g + group * s];
         }
     }
 
@@ -1037,12 +1038,13 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
         }
     }
 
-    /* Reshape back to 1D: x_shape = reshape(x_fc.', 1, []) */
-    /* x_fc is [seg][group], x_fc.' is [group][seg], reshape to 1×W_padded */
+    /* Reshape back to 1D: x_shape = reshape(x_fc.', 1, [])
+     * x_fc is [seg][group], x_fc.' is [group][seg]
+     * Column-major fill: x_shape[g + group*s] = x_fc(s,g) */
     int32_t x_flat[260];
     for (int g = 0; g < group; g++) {
         for (int s = 0; s < seg; s++) {
-            x_flat[g * seg + s] = x_fc_2d[s * group + g];
+            x_flat[g + group * s] = x_fc_2d[s * group + g];
         }
     }
 

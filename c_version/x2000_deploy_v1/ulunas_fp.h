@@ -311,6 +311,10 @@ void prelu_fixed(int32_t *x, int C, int Win,
 void ln_fixed(int32_t *x, int C, int Win,
               const int16_t *weight, const int32_t *bias, int qr);
 
+/* GRU internal diagnostics */
+void gru_diag_start(const char *filename);
+void gru_diag_stop(void);
+
 /* GRU: single time-step, (input_dim) → (hidden_dim)
  * ⚠️ biases are int32_t: cTFA stores s16f10 (cast needed), DPRNN stores s32f20 */
 void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,

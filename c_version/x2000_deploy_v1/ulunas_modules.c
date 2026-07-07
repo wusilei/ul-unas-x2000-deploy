@@ -889,12 +889,18 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
 #ifdef DIAG_RNN
         { FILE *f=fopen("diag_rnn1_intra_gru0.bin","wb"); fwrite(x0_gru,2,33*8,f); fclose(f); }
 #endif
+#ifdef DIAG_GRU_INTERNAL
+        gru_diag_start("diag_gru1_internal.bin");
+#endif
         bigru_fixed(x+33*8,33,8,INTRA_GRU_HID,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0,
             dpgrnn_0_intra_rnn_rnn2_weight_ih_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_ih_l0_reverse,
             dpgrnn_0_intra_rnn_rnn2_weight_hh_l0_reverse,dpgrnn_0_intra_rnn_rnn2_bias_hh_l0_reverse,
             x1_gru,qr1,qr2);
+#ifdef DIAG_GRU_INTERNAL
+        gru_diag_stop();
+#endif
 #ifdef DIAG_RNN
         { FILE *f=fopen("diag_rnn1_intra_gru1.bin","wb"); fwrite(x1_gru,2,33*8,f); fclose(f); }
 #endif

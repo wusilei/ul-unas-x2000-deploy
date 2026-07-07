@@ -11,6 +11,7 @@
  * - AffinePReLU activation (not just BN+PReLU)
  */
 
+#include <stdio.h>
 #include "ulunas_fp.h"
 
 /* ================================================================
@@ -528,23 +529,63 @@ void ln_fixed(int32_t *x, int C, int Win,
  *         → tanh → s16f15
  *         h_new = round((32768-z_t).*n_t*2^(-15)) + round(z_t.*h*2^(-15))
  */
+/* Diagnostic: dump GRU internal states for intra_gru1 (rnn1 block 0) */
+static int g_gru_diag_enable = 0;
+static int g_gru_diag_timestep = 0;
+static FILE *g_gru_diag_f = NULL;
+
+void gru_diag_start(const char *filename) {
+#ifdef DIAG_GRU_INTERNAL
+    g_gru_diag_f = fopen(filename, "wb");
+    if (g_gru_diag_f) {
+        g_gru_diag_enable = 1;
+        g_gru_diag_timestep = 0;
+    }
+#else
+    (void)filename;
+#endif
+}
+
+void gru_diag_stop(void) {
+#ifdef DIAG_GRU_INTERNAL
+    if (g_gru_diag_f) { fclose(g_gru_diag_f); g_gru_diag_f = NULL; }
+    g_gru_diag_enable = 0;
+#endif
+}
+
 void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
                     const int16_t *ih_weight, const int32_t *ih_bias,
                     const int16_t *hh_weight, const int32_t *hh_bias,
                     int16_t *y, int16_t *h_prev, int qr1, int qr2) {
-    int s_ih = 3 * hidden_dim;
-    int s_hh = 3 * hidden_dim;
+#ifdef DIAG_GRU_INTERNAL
+    int do_dump = g_gru_diag_enable;
+#else
+    int do_dump = 0;
+#endif
+    /* Weight layout: (input_dim, 3*hidden_dim) col-major for ih, (hidden_dim, 3*hidden_dim) for hh.
+     * r/z/n blocks: r=cols 0..H-1, z=cols H..2H-1, n=cols 2H..3H-1.
+     * Flat offset: z = H * input_dim (ih), H * H (hh); n = 2 * H * input_dim (ih), 2 * H * H (hh).
+     * Bias layout: (3*hidden_dim,) — r=0..H-1, z=H..2H-1, n=2H..3H-1. */
     const int16_t *ih_r_w = ih_weight;
-    const int16_t *ih_z_w = ih_weight + hidden_dim;
-    const int16_t *ih_n_w = ih_weight + 2 * hidden_dim;
+    const int16_t *ih_z_w = ih_weight + hidden_dim * input_dim;
+    const int16_t *ih_n_w = ih_weight + 2 * hidden_dim * input_dim;
     const int32_t *ih_r_b = ih_bias, *ih_z_b = ih_bias + hidden_dim, *ih_n_b = ih_bias + 2 * hidden_dim;
     const int16_t *hh_r_w = hh_weight;
-    const int16_t *hh_z_w = hh_weight + hidden_dim;
-    const int16_t *hh_n_w = hh_weight + 2 * hidden_dim;
+    const int16_t *hh_z_w = hh_weight + hidden_dim * hidden_dim;
+    const int16_t *hh_n_w = hh_weight + 2 * hidden_dim * hidden_dim;
     const int32_t *hh_r_b = hh_bias, *hh_z_b = hh_bias + hidden_dim, *hh_n_b = hh_bias + 2 * hidden_dim;
 
     int shift_ih = -qr1;  /* should be 13 for UL-UNAS */
     int shift_hh = -qr2;  /* should be 8 for UL-UNAS */
+
+#ifdef DIAG_GRU_INTERNAL
+    if (do_dump) {
+        int32_t ts = g_gru_diag_timestep++;
+        fwrite(&ts, sizeof(int32_t), 1, g_gru_diag_f);           /* timestep index */
+        fwrite(h_prev, sizeof(int16_t), hidden_dim, g_gru_diag_f); /* h_prev before step */
+        fwrite(x_t, sizeof(int32_t), input_dim, g_gru_diag_f);    /* input to this step */
+    }
+#endif
 
     /* Reset gate R: r_t = round(x*ih_w*2^qr1) + round(h*hh_w*2^qr2) + ih_b + hh_b
      * ⚠️ CRITICAL: biases added AFTER shifts, NOT before! (Q20 biases, not Q10) */
@@ -564,6 +605,12 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
     uint16_t r_q15[128];
     for (int h = 0; h < hidden_dim; h++)
         r_q15[h] = U2Q15(sigmoidf_fp(Q20_TO_F(r_t[h])));
+#ifdef DIAG_GRU_INTERNAL
+    if (do_dump) {
+        fwrite(r_t, sizeof(int32_t), hidden_dim, g_gru_diag_f);     /* Q20 pre-sigmoid */
+        fwrite(r_q15, sizeof(uint16_t), hidden_dim, g_gru_diag_f);  /* Q15 post-sigmoid */
+    }
+#endif
 
     /* Update gate Z: same pattern — biases AFTER shifts */
     int32_t z_t[128];
@@ -582,6 +629,12 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
     uint16_t z_q15[128];
     for (int h = 0; h < hidden_dim; h++)
         z_q15[h] = U2Q15(sigmoidf_fp(Q20_TO_F(z_t[h])));
+#ifdef DIAG_GRU_INTERNAL
+    if (do_dump) {
+        fwrite(z_t, sizeof(int32_t), hidden_dim, g_gru_diag_f);     /* Q20 pre-sigmoid */
+        fwrite(z_q15, sizeof(uint16_t), hidden_dim, g_gru_diag_f);  /* Q15 post-sigmoid */
+    }
+#endif
 
     /* Candidate hidden state N:
      * h_t = round(h*hh_n_w*2^qr2) + hh_n_b
@@ -609,6 +662,12 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
     int16_t n_q15[128];
     for (int h = 0; h < hidden_dim; h++)
         n_q15[h] = F2Q15(tanhf_fp(Q20_TO_F(n_t[h])));
+#ifdef DIAG_GRU_INTERNAL
+    if (do_dump) {
+        fwrite(n_t, sizeof(int32_t), hidden_dim, g_gru_diag_f);     /* Q20 pre-tanh */
+        fwrite(n_q15, sizeof(int16_t), hidden_dim, g_gru_diag_f);   /* Q15 post-tanh */
+    }
+#endif
 
     /* Hidden state update: h_new = ((32768-z)*n + z*h) >> 15 */
     for (int h = 0; h < hidden_dim; h++) {
@@ -618,6 +677,11 @@ void gru_step_fixed(const int32_t *x_t, int input_dim, int hidden_dim,
         if (y) y[h] = hn;
         h_prev[h] = hn;
     }
+#ifdef DIAG_GRU_INTERNAL
+    if (do_dump) {
+        fwrite(h_prev, sizeof(int16_t), hidden_dim, g_gru_diag_f);  /* Q15 new hidden state */
+    }
+#endif
 }
 
 /* ================================================================

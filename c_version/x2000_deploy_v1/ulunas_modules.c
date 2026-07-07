@@ -28,11 +28,11 @@ ctfa_qr_t g_qr_d1 = {-12, -14, -8,  -12, -8, -8};
 ctfa_qr_t g_qr_d2 = {-22, -20, -5,  -22, -20, -6};
 ctfa_qr_t g_qr_d3 = {-5, -17, -9,  -11, -8, -9};
 ctfa_qr_t g_qr_d4 = {-16, -18, -2,  -9, -13, -6};
-ctfa_qr_t g_qr_e0 = {-13, -20, -2,  -13, -5, -14};
-ctfa_qr_t g_qr_e1 = {-22, -20, -5,  -22, -14, -9};
-ctfa_qr_t g_qr_e2 = {-2, -15, -11,  -15, -1, -3};
-ctfa_qr_t g_qr_e3 = {-22, -14, -8,  -16, -2, -8};
-ctfa_qr_t g_qr_e4 = {-22, -14, -24,  -22, -22, -12};
+ctfa_qr_t g_qr_e0 = {-13, -8, -8,  -13, -8, -9};   /* S1-aligned: Q33>>13=Q20 */
+ctfa_qr_t g_qr_e1 = {-13, -8, -8,  -13, -8, -9};
+ctfa_qr_t g_qr_e2 = {-13, -8, -8,  -13, -8, -9};
+ctfa_qr_t g_qr_e3 = {-13, -8, -8,  -13, -8, -9};
+ctfa_qr_t g_qr_e4 = {-13, -8, -8,  -13, -8, -9};
 
 #define D0_TA (g_qr_d0.ta_qr1), (g_qr_d0.ta_qr2), (g_qr_d0.ta_fc)
 #define D0_FA (g_qr_d0.fa_qr1), (g_qr_d0.fa_qr2), (g_qr_d0.fa_fc)
@@ -65,16 +65,16 @@ ctfa_qr_t g_qr_e4 = {-22, -14, -24,  -22, -22, -12};
 #define D3_FA -11, -8, -9
 #define D4_TA -16, -18, -2
 #define D4_FA -9, -13, -6
-#define E0_TA -13, -20, -2
-#define E0_FA -13, -5, -14
-#define E1_TA -22, -20, -5
-#define E1_FA -22, -14, -9
-#define E2_TA -2, -15, -11
-#define E2_FA -15, -1, -3
-#define E3_TA -22, -14, -8
-#define E3_FA -16, -2, -8
-#define E4_TA -22, -14, -24
-#define E4_FA -22, -22, -12
+#define E0_TA -13, -8, -8     /* Q13: Q33>>13=Q20 → sigmoid aligned */
+#define E0_FA -13, -8, -9
+#define E1_TA -13, -8, -8
+#define E1_FA -13, -8, -9
+#define E2_TA -13, -8, -8
+#define E2_FA -13, -8, -9
+#define E3_TA -13, -8, -8
+#define E3_FA -13, -8, -9
+#define E4_TA -13, -8, -8
+#define E4_FA -13, -8, -9
 #endif
 
 /* ================================================================
@@ -341,6 +341,9 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_ta_gru_bias_hh_l0,
                    encoder_en_convs_3_pconv2_2_ta_fc_weight,encoder_en_convs_3_pconv2_2_ta_fc_bias,
                    ta_h,ta_gate, E3_TA);
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_ta.bin","wb"); fwrite(ta_gate,2,32,f); fclose(f); }
+#endif
     cTFA_fa_module(y_pconv1,32,33,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_ih_l0,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0,
@@ -348,9 +351,15 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_hh_l0_reverse,encoder_en_convs_3_pconv2_2_fa_gru_bias_hh_l0_reverse,
                    encoder_en_convs_3_pconv2_2_fa_fc_weight,encoder_en_convs_3_pconv2_2_fa_fc_bias,
                    fa_gate, E3_FA);
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_fa.bin","wb"); fwrite(fa_gate,4,32*33,f); fclose(f); }
+#endif
 
     // ta_gate is now uint16, used directly
     int32_t y_attn[32*33]; cTFA_apply(y_pconv1,ta_gate,fa_gate,32,33,y_attn);
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_ctfa_out.bin","wb"); fwrite(y_attn,4,32*33,f); fclose(f); }
+#endif
     shuffle_deinterleave(y_attn,16,33,y);
 }
 

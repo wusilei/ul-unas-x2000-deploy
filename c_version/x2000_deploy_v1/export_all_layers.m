@@ -134,8 +134,27 @@ for t = 1:max_frames
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e2.bin'], int32(y_e2));
 
     % --- XMB1: PConv0(24→32 grouped) → shuffle → nonTConv(32→32,k=1×5) → y_tconv (32,33) → PConv1(BN) → cTFA → y_e3 ---
-    y_e3_pconv0 = XMB1_PConv_block_0(y_e2);
-    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_pconv0.bin'], int32(y_e3_pconv0));
+    % PConv0 expanded: pconv2d(2 groups) → BN → AffinePReLU
+    e3_p0_conv_w = importdata('encoder_en_convs_3_pconv1_0_weight.mat');
+    e3_p0_conv_b = importdata('encoder_en_convs_3_pconv1_0_bias.mat');
+    e3_p0_bn_w   = importdata('encoder_en_convs_3_pconv1_1_weight.mat');
+    e3_p0_bn_b   = importdata('encoder_en_convs_3_pconv1_1_bias.mat');
+    e3_p0_bn_m   = importdata('encoder_en_convs_3_pconv1_1_running_mean.mat');
+    e3_p0_bn_v   = importdata('encoder_en_convs_3_pconv1_1_running_var.mat');
+    e3_p0_ap_w   = importdata('encoder_en_convs_3_pconv1_2_affine_weight.mat');
+    e3_p0_ap_b   = importdata('encoder_en_convs_3_pconv1_2_affine_bias.mat');
+    e3_p0_ap_s   = importdata('encoder_en_convs_3_pconv1_2_slope_weight.mat');
+
+    e3_p0_c0 = pconv2d_func(y_e2(1:12,:), 12, 16, 1, 33, e3_p0_conv_w(1:16,:),  e3_p0_conv_b(1:16),  -13);
+    e3_p0_c1 = pconv2d_func(y_e2(13:24,:),12, 16, 1, 33, e3_p0_conv_w(17:32,:), e3_p0_conv_b(17:32), -13);
+    e3_p0_conv = cat(1, e3_p0_c0, e3_p0_c1);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_p0_conv.bin'], int32(e3_p0_conv));  % after pconv2d+bias
+
+    e3_p0_bn = bn_func(e3_p0_conv, e3_p0_bn_w, e3_p0_bn_b, e3_p0_bn_m, e3_p0_bn_v, -11, -14);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_p0_bn.bin'], int32(e3_p0_bn));      % after BN
+
+    y_e3_pconv0 = affineprelu_func(e3_p0_bn, e3_p0_ap_w, e3_p0_ap_b, e3_p0_ap_s, -13, -13);
+    write_bin([out_dir 'frame' num2str(t-1) '_enc_e3_pconv0.bin'], int32(y_e3_pconv0));  % after AffinePReLU
 
     y_e3_s = zeros(32, 33);
     y_e3_s(1:2:end, :) = y_e3_pconv0(1:16, :);

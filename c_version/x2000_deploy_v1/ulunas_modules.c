@@ -289,8 +289,14 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
       pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-13,y0);
       pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-13,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
+#ifdef DIAG_E3
+      { FILE *f=fopen("diag_e3_conv.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }
+#endif
       bn_fixed(y_pconv0,32,33,encoder_en_convs_3_pconv1_1_weight,encoder_en_convs_3_pconv1_1_bias,
                encoder_en_convs_3_pconv1_1_running_mean,encoder_en_convs_3_pconv1_1_running_var,-11,-14);
+#ifdef DIAG_E3
+      { FILE *f=fopen("diag_e3_bn.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }
+#endif
       affine_prelu_fixed(y_pconv0,32,33,encoder_en_convs_3_pconv1_2_affine_weight,
                          encoder_en_convs_3_pconv1_2_affine_bias,encoder_en_convs_3_pconv1_2_slope_weight,-13,-13); }
 

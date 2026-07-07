@@ -169,6 +169,52 @@ int main(int argc, char **argv) {
             }
         }
 
+        /* ── e3 sub-step per-channel trace for outlier channels ── */
+        {
+            const int outlier_ch[] = {6, 13, 25, 29};
+            const int n_outlier = 4;
+            const char *sub_names[] = {"conv","bn","pconv0","shuf","tconv","pconv1","ctfa_out"};
+            const int n_subs = 7;
+
+            /* Load golden sub-step files */
+            int32_t *g_pconv0=NULL, *g_shuf=NULL, *g_pconv1=NULL, *g_e3=NULL;
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3_pconv0.bin",dir,f); g_pconv0=load_int32(p,32*33);
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3_shuf.bin",dir,f);   g_shuf=load_int32(p,32*33);
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3_pconv1.bin",dir,f); g_pconv1=load_int32(p,32*33);
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3.bin",dir,f);        g_e3=load_int32(p,32*33);
+
+            printf("\n  e3 sub-step trace (ch6 ch13 ch25 ch29):\n");
+            printf("  %-10s  %8s  %8s  %8s  %8s\n", "sub-step", "ch6", "ch13", "ch25", "ch29");
+            printf("  %-10s  %8s  %8s  %8s  %8s\n", "----------", "------", "------", "------", "------");
+
+            for(int s=0;s<n_subs;s++){
+                snprintf(p,sizeof(p),"diag_e3_%s.bin",sub_names[s]);
+                int32_t *c_dump = load_int32(p, 32*33);
+                /* Map C dump to golden: conv/bn→pconv0, pconv0→g_pconv0, shuf→g_shuf,
+                   tconv/pconv1→g_pconv1, ctfa_out→g_e3 */
+                int32_t *golden = (s<=2) ? g_pconv0 : (s==3) ? g_shuf : (s<=5) ? g_pconv1 : g_e3;
+
+                if(c_dump && golden){
+                    printf("  %-10s", sub_names[s]);
+                    for(int o=0;o<n_outlier;o++){
+                        int ch = outlier_ch[o];
+                        double s_e=0, e_e=0;
+                        for(int w=0;w<33;w++){
+                            int c_idx = ch*33 + w;           /* C row-major */
+                            int g_idx = ch + 32*w;           /* golden col-major */
+                            double gv=golden[g_idx], cv=c_dump[c_idx], d=gv-cv;
+                            s_e+=gv*gv; e_e+=d*d;
+                        }
+                        double snr = e_e<1e-30 ? 999 : 10*log10(s_e/e_e);
+                        printf("  %+6.1f", snr);
+                    }
+                    printf("\n");
+                }
+                free(c_dump);
+            }
+            free(g_pconv0); free(g_shuf); free(g_pconv1); free(g_e3);
+        }
+
         /* GDPRNN */
         int32_t r1[16*33],r2[16*33];
         GDPRNN_module(e4,st.inter_prev0,0,r1);

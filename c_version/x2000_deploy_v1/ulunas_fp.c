@@ -99,18 +99,17 @@ void pconv2d_fixed(const int32_t *x, int Cin, int Win,
                    const int16_t *weight, const int32_t *bias,
                    int Cout, int stride, int qr,
                    int32_t *y) {
+    int shift = -qr;
     for (int co = 0; co < Cout; co++) {
         for (int w = 0; w < Win; w++) {
-            int64_t acc = bias[co];
+            int64_t acc = 0;  /* accumulate @ Q33, bias added after shift (MATLAB order) */
             for (int ci = 0; ci < Cin; ci++) {
                 int32_t xv = x[ci * Win + w];
-                int16_t kv = weight[co + stride * ci];  /* stride for grouped convs */
-                int64_t prod = (int64_t)xv * (int64_t)kv;
-                int shift = -qr;
-                prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                acc += prod;
+                int16_t kv = weight[co + stride * ci];
+                acc += (int64_t)xv * (int64_t)kv;
             }
-            y[co * Win + w] = sat32(acc);
+            y[co * Win + w] = sat32((int64_t)bias[co] +
+                ((acc + ((int64_t)1 << (shift - 1))) >> shift));
         }
     }
 }
@@ -124,18 +123,17 @@ void ptconv2d_fixed(const int32_t *x, int Cin, int Win,
                     const int16_t *weight, const int32_t *bias,
                     int Cout, int qr,
                     int32_t *y) {
+    int shift = -qr;
     for (int co = 0; co < Cout; co++) {
         for (int w = 0; w < Win; w++) {
-            int64_t acc = bias[co];
+            int64_t acc = 0;
             for (int ci = 0; ci < Cin; ci++) {
                 int32_t xv = x[ci * Win + w];
                 int16_t kv = weight[ci * Cout + co];
-                int64_t prod = (int64_t)xv * (int64_t)kv;
-                int shift = -qr;
-                prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
-                acc += prod;
+                acc += (int64_t)xv * (int64_t)kv;
             }
-            y[co * Win + w] = sat32(acc);
+            y[co * Win + w] = sat32((int64_t)bias[co] +
+                ((acc + ((int64_t)1 << (shift - 1))) >> shift));
         }
     }
 }

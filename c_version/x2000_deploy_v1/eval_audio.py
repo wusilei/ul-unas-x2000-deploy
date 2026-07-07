@@ -66,8 +66,9 @@ def mask_to_wav(work_dir, n_frames, out_wav, sr):
             print(f"  Frame {f}: expected 514 int32, got {len(data)}")
             continue
 
-        real_q20 = data[0::2].astype(np.float64)  # real parts
-        imag_q20 = data[1::2].astype(np.float64)  # imag parts
+        # C/MATLAB MASK format: [real_0..real_256, imag_0..imag_256] (NOT interleaved)
+        real_q20 = data[:257].astype(np.float64)   # first 257 = real
+        imag_q20 = data[257:].astype(np.float64)   # last 257 = imag
         spec_float = (real_q20 + 1j * imag_q20) / (2**20)  # Q20 → float
 
         # ISTFT for this frame
@@ -81,10 +82,10 @@ def mask_to_wav(work_dir, n_frames, out_wav, sr):
     mask = window_sum > 1e-10
     enhanced[mask] /= window_sum[mask]
 
-    # Normalize to [-1, 1]
-    peak = np.max(np.abs(enhanced))
-    if peak > 0:
-        enhanced /= peak * 1.01
+    # Remove zero-padding from first/last N_FFT/2 samples (matching MATLAB)
+    pad_len = N_FFT // 2
+    if len(enhanced) > 2 * pad_len:
+        enhanced = enhanced[pad_len:-pad_len]
 
     sf.write(out_wav, enhanced.astype(np.float32), sr)
     return enhanced

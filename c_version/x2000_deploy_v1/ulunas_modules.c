@@ -8,7 +8,7 @@
  * cTFA_fa GRU Qr:        Enc: -13,-8   De_XDWS0/De_XMB0: -12,-7
  *                         De_XDWS1/De_XConv: -13,-8   De_XMB1: -11,-6
  * cTFA_ta GRU Qr:        ALL: -13,-8
- * cTFA_ta FC shift:       Enc: -8   De_XDWS0/De_XMB0/De_XMB1: -9   De_XDWS1/De_XConv: -8
+ * cTFA_ta FC shift:       Enc: e0=-8, e1/e2/e3=-10, e4=-9   Dec: d0/d1/d3=-9, d2/d4=-8
  * cTFA_fa FC shift:       ALL: -9
  */
 
@@ -23,16 +23,16 @@
  * Defaults: v2-calibrated values from 2026-07-06 Session 3
  */
 #ifdef QR_CALIBRATION_MODE
-ctfa_qr_t g_qr_d0 = {-16, -4, -12,  -14, -6, -12};
-ctfa_qr_t g_qr_d1 = {-12, -14, -8,  -12, -8, -8};
-ctfa_qr_t g_qr_d2 = {-22, -20, -5,  -22, -20, -6};
-ctfa_qr_t g_qr_d3 = {-5, -17, -9,  -11, -8, -9};
-ctfa_qr_t g_qr_d4 = {-16, -18, -2,  -9, -13, -6};
-ctfa_qr_t g_qr_e0 = {-13, -8, -8,  -13, -8, -9};   /* S1-aligned: Q33>>13=Q20 */
-ctfa_qr_t g_qr_e1 = {-13, -8, -8,  -13, -8, -9};
-ctfa_qr_t g_qr_e2 = {-13, -8, -8,  -13, -8, -9};
-ctfa_qr_t g_qr_e3 = {-13, -8, -8,  -13, -8, -9};
-ctfa_qr_t g_qr_e4 = {-13, -8, -8,  -13, -8, -9};
+ctfa_qr_t g_qr_d0 = {-13, -8, -9,  -13, -8, -9};   /* MATLAB: ta 2^(-9), fa 2^(-9) */
+ctfa_qr_t g_qr_d1 = {-13, -8, -9,  -13, -8, -9};
+ctfa_qr_t g_qr_d2 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8) */
+ctfa_qr_t g_qr_d3 = {-13, -8, -9,  -13, -8, -9};
+ctfa_qr_t g_qr_d4 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8) */
+ctfa_qr_t g_qr_e0 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8), fa 2^(-9) */
+ctfa_qr_t g_qr_e1 = {-13, -8, -10, -13, -8, -9};   /* MATLAB: ta 2^(-10) */
+ctfa_qr_t g_qr_e2 = {-13, -8, -10, -13, -8, -9};
+ctfa_qr_t g_qr_e3 = {-13, -8, -10, -13, -8, -9};
+ctfa_qr_t g_qr_e4 = {-13, -8, -9,  -13, -8, -9};   /* MATLAB: ta 2^(-9) */
 
 #define D0_TA (g_qr_d0.ta_qr1), (g_qr_d0.ta_qr2), (g_qr_d0.ta_fc)
 #define D0_FA (g_qr_d0.fa_qr1), (g_qr_d0.fa_qr2), (g_qr_d0.fa_fc)
@@ -55,25 +55,25 @@ ctfa_qr_t g_qr_e4 = {-13, -8, -8,  -13, -8, -9};
 #define E4_TA (g_qr_e4.ta_qr1), (g_qr_e4.ta_qr2), (g_qr_e4.ta_fc)
 #define E4_FA (g_qr_e4.fa_qr1), (g_qr_e4.fa_qr2), (g_qr_e4.fa_fc)
 #else
-#define D0_TA -16, -4, -12
-#define D0_FA -14, -6, -12
-#define D1_TA -12, -14, -8
-#define D1_FA -12, -8, -8
-#define D2_TA -22, -20, -5
-#define D2_FA -22, -20, -6
-#define D3_TA -5, -17, -9
-#define D3_FA -11, -8, -9
-#define D4_TA -16, -18, -2
-#define D4_FA -9, -13, -6
-#define E0_TA -13, -8, -8     /* Q13: Q33>>13=Q20 → sigmoid aligned */
+#define D0_TA -13, -8, -9     /* MATLAB: ta 2^(-9) */
+#define D0_FA -13, -8, -9
+#define D1_TA -13, -8, -9
+#define D1_FA -13, -8, -9
+#define D2_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
+#define D2_FA -13, -8, -9
+#define D3_TA -13, -8, -9
+#define D3_FA -13, -8, -9
+#define D4_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
+#define D4_FA -13, -8, -9
+#define E0_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
 #define E0_FA -13, -8, -9
-#define E1_TA -13, -8, -8
+#define E1_TA -13, -8, -10    /* MATLAB: ta 2^(-10) */
 #define E1_FA -13, -8, -9
-#define E2_TA -13, -8, -8
+#define E2_TA -13, -8, -10
 #define E2_FA -13, -8, -9
-#define E3_TA -13, -8, -8
+#define E3_TA -13, -8, -10
 #define E3_FA -13, -8, -9
-#define E4_TA -13, -8, -8
+#define E4_TA -13, -8, -9     /* MATLAB: ta 2^(-9) */
 #define E4_FA -13, -8, -9
 #endif
 
@@ -85,8 +85,8 @@ d4_tconv_qr_t g_d4_tconv = {-14, -11, -11};  /* conv_qr, bn_qr1, bn_qr2 */
 #endif /* JOINT_CALIBRATION_MODE */
 
 /* DPRNN GRU QR variables (always defined, modified by calibrator in QR_CALIBRATION_MODE) */
-dprnn_gru_qr_t g_gru_qr_0 = {-11, -4, -14, -12};
-dprnn_gru_qr_t g_gru_qr_1 = {-16, -12, -11, -12};
+dprnn_gru_qr_t g_gru_qr_0 = {-13, -13, -13, -13};  /* best Q13-theoretical so far */
+dprnn_gru_qr_t g_gru_qr_1 = {-13, -13, -13, -13};
 
 /* DPRNN GRU QR macros — calibration mode uses globals, else hardcoded */
 #ifdef QR_CALIBRATION_MODE
@@ -99,14 +99,14 @@ dprnn_gru_qr_t g_gru_qr_1 = {-16, -12, -11, -12};
 #define GRU1_INTER_QR1 g_gru_qr_1.inter_qr1
 #define GRU1_INTER_QR2 g_gru_qr_1.inter_qr2
 #else
-#define GRU0_INTRA_QR1 -11
-#define GRU0_INTRA_QR2 -4
-#define GRU0_INTER_QR1 -14
-#define GRU0_INTER_QR2 -12
-#define GRU1_INTRA_QR1 -16
-#define GRU1_INTRA_QR2 -12
-#define GRU1_INTER_QR1 -11
-#define GRU1_INTER_QR2 -12
+#define GRU0_INTRA_QR1 -13
+#define GRU0_INTRA_QR2 -13
+#define GRU0_INTER_QR1 -13
+#define GRU0_INTER_QR2 -13
+#define GRU1_INTRA_QR1 -13
+#define GRU1_INTRA_QR2 -13
+#define GRU1_INTER_QR1 -13
+#define GRU1_INTER_QR2 -13
 #endif /* QR_CALIBRATION_MODE for GRU */
 
 /* D4 TConv QR macros */
@@ -284,10 +284,10 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
 void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
     int32_t y_pconv0[32*33], y_shuf[32*33], y_tconv[32*33], y_pconv1[32*33];
 
-    /* PConv0: grouped 12→16 per group, qr=-13 */
+    /* PConv0: grouped 12→16 per group, qr=-18 (sweep-optimized) */
     { int32_t y0[16*33], y1[16*33];
-      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-13,y0);
-      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-13,y1);
+      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-18,y0);
+      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-18,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
 #ifdef DIAG_E3
       { FILE *f=fopen("diag_e3_conv.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }

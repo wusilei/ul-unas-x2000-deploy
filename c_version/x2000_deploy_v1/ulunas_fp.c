@@ -103,7 +103,7 @@ void pconv2d_fixed(const int32_t *x, int Cin, int Win,
             int64_t acc = bias[co];
             for (int ci = 0; ci < Cin; ci++) {
                 int32_t xv = x[ci * Win + w];
-                int16_t kv = weight[co * Cin + ci];
+                int16_t kv = weight[co + Cout * ci];  /* col-major (Cout, Cin) */
                 int64_t prod = (int64_t)xv * (int64_t)kv;
                 int shift = -qr;
                 prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;

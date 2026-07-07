@@ -1176,6 +1176,13 @@ void nonGTConv_block(const int32_t *x, int Cin, int Cout, int Win, int Wout,
 /* ================================================================
  * GTConv_block — Grouped Transposed Conv Block with Cache (Decoder)
  * ================================================================ */
+/* ================================================================
+ * GTConv_block — Grouped Temporal Transposed Conv Block (Decoder)
+ * ================================================================
+ * Bug #6 fix: MUST integrate cache into forward pass (like TConv_block).
+ * Builds full 3D input [cache + current] → 3D grouped transposed conv.
+ * Matches MATLAB gtconv2d_func: x_chan = [conv_cache; x], kernel (2,3).
+ */
 void GTConv_block(const int32_t *x, int32_t *conv_cache,
                   int Cin, int Cout, int Win, int Wout,
                   int Hk, int Wk, int stride_h, int stride_w,
@@ -1187,21 +1194,66 @@ void GTConv_block(const int32_t *x, int32_t *conv_cache,
                   const int16_t *affine_w, const int32_t *affine_b,
                   const int16_t *slope_w,
                   int32_t *y) {
-    int32_t *y_conv = (int32_t *)calloc(Cout * Wout, sizeof(int32_t));
-    gtconv2d_fixed(x, Cin, Win, conv_w, conv_b, Cout, Wout, Hk, Wk,
-                   stride_w, groups, conv_qr, y_conv);
+    int H_in = cache_rows + 1;
+    int pad_w = (Wk - 1) / 2;
+    int pad_h = 0;
+    int Cin_pg = Cin / groups;
+    int Cout_pg = Cout / groups;
+    int shift = -conv_qr;
 
-    /* Update cache */
-    if (cache_rows > 1) {
-        memmove(conv_cache, conv_cache + Cin * Win, (cache_rows - 1) * Cin * Win * sizeof(int32_t));
+    /* Build full 3D input: (H_in, Cin, Win) = [cache_oldest, ..., cache_newest, x_current] */
+    int32_t *x_full = (int32_t *)calloc(H_in * Cin * Win, sizeof(int32_t));
+    for (int h = 0; h < cache_rows; h++)
+        for (int c = 0; c < Cin; c++)
+            memcpy(x_full + (h * Cin + c) * Win, conv_cache + (h * Cin + c) * Win, Win * sizeof(int32_t));
+    for (int c = 0; c < Cin; c++)
+        memcpy(x_full + (cache_rows * Cin + c) * Win, x + c * Win, Win * sizeof(int32_t));
+
+    /* 3D grouped transposed conv: (Cin_pg, H_in, Win) × (Cout_pg, Cin_pg, Hk, Wk) → (Cout_pg, Wout) */
+    int32_t *y_conv = (int32_t *)calloc(Cout * Wout, sizeof(int32_t));
+    for (int g = 0; g < groups; g++) {
+        int ci_off = g * Cin_pg;
+        int co_off = g * Cout_pg;
+        int w_off = g * Cout_pg * Cin_pg * Hk * Wk;
+
+        for (int co_l = 0; co_l < Cout_pg; co_l++) {
+            int co = co_off + co_l;
+            for (int wo = 0; wo < Wout; wo++)
+                y_conv[co * Wout + wo] = conv_b[co];
+
+            for (int ci_l = 0; ci_l < Cin_pg; ci_l++) {
+                int ci = ci_off + ci_l;
+                for (int wo = 0; wo < Wout; wo++) {
+                    int64_t acc = 0;
+                    for (int hk = 0; hk < Hk; hk++) {
+                        int hi = hk - pad_h;
+                        if (hi < 0 || hi >= H_in) continue;
+                        for (int wk = 0; wk < Wk; wk++) {
+                            int wi = wo * stride_w + wk - pad_w;
+                            if (wi < 0 || wi >= Win) continue;
+                            int32_t xv = x_full[(hi * Cin + ci) * Win + wi];
+                            int kidx = w_off + ((co_l * Cin_pg + ci_l) * Hk + hk) * Wk + wk;
+                            int64_t prod = (int64_t)xv * (int64_t)conv_w[kidx];
+                            prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
+                            acc += prod;
+                        }
+                    }
+                    y_conv[co * Wout + wo] = sat32((int64_t)y_conv[co * Wout + wo] + acc);
+                }
+            }
+        }
     }
+
+    /* Update cache: shift old rows out, store current frame at end */
+    if (cache_rows > 1)
+        memmove(conv_cache, conv_cache + Cin * Win, (cache_rows - 1) * Cin * Win * sizeof(int32_t));
     for (int c = 0; c < Cin; c++)
         memcpy(conv_cache + (cache_rows - 1) * Cin * Win + c * Win, x + c * Win, Win * sizeof(int32_t));
 
     bn_fixed(y_conv, Cout, Wout, bn_w, bn_b, bn_mean, bn_var, bn_qr1, bn_qr2);
     affine_prelu_fixed(y_conv, Cout, Wout, affine_w, affine_b, slope_w, -13, -13);
     memcpy(y, y_conv, Cout * Wout * sizeof(int32_t));
-    free(y_conv);
+    free(x_full); free(y_conv);
 }
 
 /* ================================================================

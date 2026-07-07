@@ -579,7 +579,7 @@ void De_XDWS1_module(const int32_t *x, const int32_t *x_skip,
 
     /* GTConv with cache: Cin=Cout=24, k=(2,3), s=1, groups=12 */
     /* Calibrated: conv_qr=-12 bn_qr1=-18 bn_qr2=-14 (was -13,-11,-14) */
-    GTConv_block(y_shuf,conv_cache,24,24,33,33,1,3,1,1,CACHE_DEXDWS1_ROWS, -12, 24, -18, -14,
+    GTConv_block(y_shuf,conv_cache,24,24,33,33,2,3,1,1,CACHE_DEXDWS1_ROWS, -12, 24, -18, -14,
                  decoder_de_convs_2_dconv_1_weight,decoder_de_convs_2_dconv_1_bias,
                  decoder_de_convs_2_dconv_2_weight,decoder_de_convs_2_dconv_2_bias,
                  decoder_de_convs_2_dconv_2_running_mean,decoder_de_convs_2_dconv_2_running_var,
@@ -636,7 +636,7 @@ void De_XMB1_module(const int32_t *x, const int32_t *x_skip,
 
     /* GTConv: Cin=Cout=12, k=(2,3), s=2(upsample W 33→65), groups=6 */
     /* Calibrated: conv_qr=-17 bn_qr1=-18 bn_qr2=-16 (was -14,-11,-11) */
-    GTConv_block(y_shuf,conv_cache,12,12,33,65,1,3,1,2,CACHE_DEXMB1_ROWS, -17, 12, -18, -16,
+    GTConv_block(y_shuf,conv_cache,12,12,33,65,2,3,1,2,CACHE_DEXMB1_ROWS, -17, 12, -18, -16,
                  decoder_de_convs_3_dconv_1_weight,decoder_de_convs_3_dconv_1_bias,
                  decoder_de_convs_3_dconv_2_weight,decoder_de_convs_3_dconv_2_bias,
                  decoder_de_convs_3_dconv_2_running_mean,decoder_de_convs_3_dconv_2_running_var,

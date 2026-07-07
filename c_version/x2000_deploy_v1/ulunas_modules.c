@@ -24,12 +24,12 @@
 #ifdef QR_CALIBRATION_MODE
 ctfa_qr_t g_qr_d0 = {-16, -4, -12,  -14, -6, -12};
 ctfa_qr_t g_qr_d1 = {-12, -14, -8,  -12, -8, -8};
-ctfa_qr_t g_qr_d2 = {-16, -14, -2,  -12, -4, -4};
-ctfa_qr_t g_qr_d3 = {-8, -15, -11,  -9, -6, -10};
+ctfa_qr_t g_qr_d2 = {-18, -14, -4,  -20, -8, -6};
+ctfa_qr_t g_qr_d3 = {-16, -14, -12,  -2, -14, -10};
 ctfa_qr_t g_qr_d4 = {-16, -14, -2,  -8, -10, -6};
-ctfa_qr_t g_qr_e0 = {-19, -14, -8,  -4, -2, -4};
-ctfa_qr_t g_qr_e1 = {-22, -14, -8,  -22, -22, -8};
-ctfa_qr_t g_qr_e2 = {-4, -14, -8,  -22, -6, -8};
+ctfa_qr_t g_qr_e0 = {-18, -14, -12,  -10, -8, -4};
+ctfa_qr_t g_qr_e1 = {-14, -14, -4,  -2, -14, -6};
+ctfa_qr_t g_qr_e2 = {-2, -15, -11,  -15, -1, -3};
 ctfa_qr_t g_qr_e3 = {-22, -14, -8,  -16, -2, -8};
 ctfa_qr_t g_qr_e4 = {-22, -14, -24,  -22, -22, -12};
 
@@ -58,18 +58,18 @@ ctfa_qr_t g_qr_e4 = {-22, -14, -24,  -22, -22, -12};
 #define D0_FA -14, -6, -12
 #define D1_TA -12, -14, -8
 #define D1_FA -12, -8, -8
-#define D2_TA -16, -14, -2
-#define D2_FA -12, -4, -4
-#define D3_TA -8, -15, -11
-#define D3_FA -9, -6, -10
+#define D2_TA -18, -14, -4
+#define D2_FA -20, -8, -6
+#define D3_TA -16, -14, -12
+#define D3_FA -2, -14, -10
 #define D4_TA -16, -14, -2
 #define D4_FA -8, -10, -6
-#define E0_TA -19, -14, -8
-#define E0_FA -4, -2, -4
-#define E1_TA -22, -14, -8
-#define E1_FA -22, -22, -8
-#define E2_TA -4, -14, -8
-#define E2_FA -22, -6, -8
+#define E0_TA -18, -14, -12
+#define E0_FA -10, -8, -4
+#define E1_TA -14, -14, -4
+#define E1_FA -2, -14, -6
+#define E2_TA -2, -15, -11
+#define E2_FA -15, -1, -3
 #define E3_TA -22, -14, -8
 #define E3_FA -16, -2, -8
 #define E4_TA -22, -14, -24

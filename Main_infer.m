@@ -121,7 +121,7 @@ cmp_spec = I_spec + 1i*Q_spec;
 enh_audio = ISTFT_func(cmp_spec, N_fft, win_len, win_inc, hann_window);
 disp([max(enh_audio), min(enh_audio)])
 
-audio_err = abs(enh_audio - refer_audio);
+audio_err = abs(enh_audio - refer_audio(1:length(enh_audio)));
 fprintf(' Enhanced Error = [%.6f,%.6f]\n', max(audio_err(:)), mean(audio_err(:)));
 
 % sound(enh_audio,16000);

@@ -933,9 +933,10 @@ void Intra_RNN_module(const int32_t *x, int gdprnn_idx, int32_t *y) {
     const int16_t *fc_w=(gdprnn_idx==0)?dpgrnn_0_intra_fc_weight:dpgrnn_1_intra_fc_weight;
     const int32_t *fc_b=(gdprnn_idx==0)?dpgrnn_0_intra_fc_bias:dpgrnn_1_intra_fc_bias;
     int32_t x_fc[33*16];
-    for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=fc_b[o];
+    for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=0;  /* Bug #5: bias AFTER shift */
       for(int i=0;i<16;i++)acc+=(int64_t)x_gru[f*16+i]*(int64_t)fc_w[o*16+i];
-      x_fc[f*16+o]=sat32((acc+((int64_t)1<<8))>>9);}}
+      int32_t v=(int32_t)((acc+((int64_t)1<<8))>>9);
+      x_fc[f*16+o]=sat32((int64_t)v+fc_b[o]);}}
 #ifdef DIAG_RNN
     if (gdprnn_idx == 0) {
         { FILE *f=fopen("diag_rnn1_intra_fc.bin","wb"); fwrite(x_fc,4,33*16,f); fclose(f); }
@@ -1020,9 +1021,10 @@ void Inter_RNN_module(const int32_t *x, int16_t *h_prev, int gdprnn_idx, int32_t
     const int16_t *fc_w=(gdprnn_idx==0)?dpgrnn_0_inter_fc_weight:dpgrnn_1_inter_fc_weight;
     const int32_t *fc_b=(gdprnn_idx==0)?dpgrnn_0_inter_fc_bias:dpgrnn_1_inter_fc_bias;
     int32_t x_fc[33*16];
-    for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=fc_b[o];
+    for(int f=0;f<33;f++){for(int o=0;o<16;o++){int64_t acc=0;  /* Bug #5: bias AFTER shift */
       for(int i=0;i<16;i++)acc+=(int64_t)x_gru[f*16+i]*(int64_t)fc_w[o*16+i];
-      x_fc[f*16+o]=sat32((acc+((int64_t)1<<8))>>9);}}
+      int32_t v=(int32_t)((acc+((int64_t)1<<8))>>9);
+      x_fc[f*16+o]=sat32((int64_t)v+fc_b[o]);}}
 #ifdef DIAG_RNN
     if (gdprnn_idx == 0) {
         { FILE *f=fopen("diag_rnn1_inter_fc.bin","wb"); fwrite(x_fc,4,33*16,f); fclose(f); }

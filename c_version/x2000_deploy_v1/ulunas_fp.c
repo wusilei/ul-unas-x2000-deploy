@@ -875,13 +875,14 @@ void cTFA_ta_module(const int32_t *x, int C, int W,
      * MATLAB: x_fc = round(gru * fc_w * 2^(fc_shift)) + fc_b
      * gru (1, nHidden) × fc_w (nHidden, C) = (1, C)
      * MATLAB col-major: fc_w(h, c) = fc_w[h + hidden_dim * c] */
+    int shift = -fc_shift;
     for (int c = 0; c < C; c++) {
-        int64_t acc = fc_b[c];
+        int64_t acc = 0;  /* Bug #4: bias must be added AFTER shift */
         for (int h = 0; h < hidden_dim; h++) {
             acc += (int64_t)gru_out[h] * (int64_t)fc_w[h + hidden_dim * c];
         }
-        int shift = -fc_shift;
-        int32_t fc_val = sat32((acc + ((int64_t)1 << (shift - 1))) >> shift);
+        int32_t v = (int32_t)((acc + ((int64_t)1 << (shift - 1))) >> shift);
+        int32_t fc_val = sat32((int64_t)v + (int64_t)fc_b[c]);
         y[c] = U2Q15(sigmoidf_fp(Q20_TO_F(fc_val)));
     }
 }
@@ -944,11 +945,12 @@ void cTFA_fa_module(const int32_t *x, int C, int W,
     int32_t fc_out[CTA_FA_SEG * 4];
     for (int d = 0; d < 4; d++) {
         for (int s = 0; s < seg_len; s++) {
-            int64_t acc = fc_b[d];  /* per-output-dim, same for all s */
+            int64_t acc = 0;  /* Bug #4: bias must be added AFTER shift */
             for (int h = 0; h < 8; h++) {
                 acc += (int64_t)gru_out[s * 8 + h] * (int64_t)fc_w[d * 8 + h];
             }
-            fc_out[d * seg_len + s] = sat32((acc + ((int64_t)1 << (shift - 1))) >> shift);
+            int32_t v = (int32_t)((acc + ((int64_t)1 << (shift - 1))) >> shift);
+            fc_out[d * seg_len + s] = sat32((int64_t)v + (int64_t)fc_b[d]);
         }
     }
 

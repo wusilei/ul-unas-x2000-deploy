@@ -23,11 +23,11 @@
  * Defaults: v2-calibrated values from 2026-07-06 Session 3
  */
 #ifdef QR_CALIBRATION_MODE
-ctfa_qr_t g_qr_d0 = {-13, -8, -9,  -13, -8, -9};   /* MATLAB: ta 2^(-9), fa 2^(-9) */
-ctfa_qr_t g_qr_d1 = {-13, -8, -9,  -13, -8, -9};
-ctfa_qr_t g_qr_d2 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8) */
-ctfa_qr_t g_qr_d3 = {-13, -8, -9,  -13, -8, -9};
-ctfa_qr_t g_qr_d4 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8) */
+ctfa_qr_t g_qr_d0 = {-14,  -6,  -6,  -12,  -8,  -7};   /* PESQ-optimized */
+ctfa_qr_t g_qr_d1 = {-11, -11,  -9,  -20, -14,  -6};   /* PESQ-optimized */
+ctfa_qr_t g_qr_d2 = {-10, -13,  -3,   -8,  -4,  -2};   /* PESQ-optimized */
+ctfa_qr_t g_qr_d3 = { -2, -16,  -6,  -10, -12, -13};   /* PESQ-optimized */
+ctfa_qr_t g_qr_d4 = { -3, -15,  -7,  -14, -10,  -7};   /* PESQ-optimized */
 ctfa_qr_t g_qr_e0 = {-13, -8, -8,  -13, -8, -9};   /* MATLAB: ta 2^(-8), fa 2^(-9) */
 ctfa_qr_t g_qr_e1 = {-13, -8, -10, -13, -8, -9};   /* MATLAB: ta 2^(-10) */
 ctfa_qr_t g_qr_e2 = {-13, -8, -10, -13, -8, -9};
@@ -55,16 +55,16 @@ ctfa_qr_t g_qr_e4 = {-13, -8, -9,  -13, -8, -9};   /* MATLAB: ta 2^(-9) */
 #define E4_TA (g_qr_e4.ta_qr1), (g_qr_e4.ta_qr2), (g_qr_e4.ta_fc)
 #define E4_FA (g_qr_e4.fa_qr1), (g_qr_e4.fa_qr2), (g_qr_e4.fa_fc)
 #else
-#define D0_TA -13, -8, -9     /* MATLAB — calibrator confirmed optimal */
-#define D0_FA -13, -8, -9
-#define D1_TA -11, -14, -9    /* calibrated (Bug #1-3 era, best PESQ +0.151) */
-#define D1_FA -20, -14, -6    /* calibrated */
-#define D2_TA -11, -14, -5    /* calibrated */
-#define D2_FA -8, -5, -2      /* calibrated */
-#define D3_TA -4, -16, -4     /* calibrated */
-#define D3_FA -6, -4, -12     /* calibrated */
-#define D4_TA -3, -15, -6     /* calibrated */
-#define D4_FA -12, -10, -8    /* calibrated */
+#define D0_TA -14,  -6,  -6     /* PESQ-optimized */
+#define D0_FA -12,  -8,  -7
+#define D1_TA -11, -11,  -9     /* PESQ-optimized */
+#define D1_FA -20, -14,  -6
+#define D2_TA -10, -13,  -3     /* PESQ-optimized */
+#define D2_FA  -8,  -4,  -2
+#define D3_TA  -2, -16,  -6     /* PESQ-optimized */
+#define D3_FA -10, -12, -13
+#define D4_TA  -3, -15,  -7     /* PESQ-optimized */
+#define D4_FA -14, -10,  -7
 #define E0_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
 #define E0_FA -13, -8, -9
 #define E1_TA -13, -8, -10    /* MATLAB: ta 2^(-10) */

@@ -59,7 +59,7 @@ def wav_to_stft(wav_path, work_dir):
 
     return audio_padded, sr, n_frames
 
-def mask_to_wav(work_dir, n_frames, out_wav, sr):
+def mask_to_wav(work_dir, n_frames, out_wav, sr, noisy_wav=None):
     """Read MASK output (complex Q20 int32), convert to float, ISTFT."""
     # Read MASK outputs and convert from Q20 to float complex
     enhanced = np.zeros((n_frames - 1) * HOP + N_FFT, dtype=np.float32)
@@ -98,11 +98,35 @@ def mask_to_wav(work_dir, n_frames, out_wav, sr):
     if len(enhanced) > 2 * pad_len:
         enhanced = enhanced[pad_len:-pad_len]
 
+    # ── Gain compensation ──
+    # Model output is systematically -15 to -22 dB below clean speech.
+    # Match the noisy input's active-speech RMS to restore audibility.
+    if noisy_wav is None:
+        sf.write(out_wav, enhanced.astype(np.float32), sr)
+        return enhanced
+    audio, _ = sf.read(noisy_wav)
+    if audio.ndim > 1: audio = audio[:, 0]
+    # Use top 30% loudest segments of noisy as speech-active reference
+    seg_len = sr // 10  # 100ms
+    n_segs = len(audio) // seg_len
+    seg_rms = []
+    for i in range(n_segs):
+        seg = audio[i*seg_len:(i+1)*seg_len]
+        seg_rms.append(np.sqrt(np.mean(seg**2)))
+    seg_rms.sort()
+    if len(seg_rms) > 3:
+        noisy_active_rms = np.mean(seg_rms[-len(seg_rms)//3:])  # top 30%
+        enhanced_rms = np.sqrt(np.mean(enhanced**2))
+        if enhanced_rms > 1e-10 and noisy_active_rms > 1e-10:
+            gain = noisy_active_rms / enhanced_rms
+            enhanced *= gain
+            print(f"  Gain compensation: {20*np.log10(gain):+.1f} dB (active-speech RMS match)")
+
     sf.write(out_wav, enhanced.astype(np.float32), sr)
     return enhanced
 
 def compute_metrics(enhanced, clean_wav, sr):
-    """Compute PESQ (wb) and STOI."""
+    """Compute PESQ (wb), STOI, and per-band energy diagnostics."""
     clean_audio, _ = sf.read(clean_wav)
     if clean_audio.ndim > 1:
         clean_audio = clean_audio[:, 0]
@@ -139,6 +163,71 @@ def compute_metrics(enhanced, clean_wav, sr):
         print(f"  STOI error: {e}")
         s = float('nan')
 
+    # ── Per-band energy diagnostics ──
+    print(f"\n  [Band energy ratio (enhanced/clean)]:")
+    n_fft_bands = 512
+    hop_bands = 256
+    win = np.hanning(n_fft_bands)
+
+    # Octave band edges (Hz) for 16kHz
+    band_edges = [0, 200, 400, 800, 1500, 3000, 5000, 8000]
+    band_names = ['0-200', '200-400', '400-800', '800-1.5k', '1.5k-3k', '3k-5k', '5k-8k']
+
+    for enhanced_sig, clean_sig in [(enhanced_16k, clean_16k)]:
+        # Compute STFTs
+        from scipy.signal import stft as scipy_stft
+        f_enh, t_enh, Zxx_enh = scipy_stft(enhanced_sig, fs=target_sr, window=win,
+                                             nperseg=n_fft_bands, noverlap=hop_bands)
+        f_cln, t_cln, Zxx_cln = scipy_stft(clean_sig, fs=target_sr, window=win,
+                                             nperseg=n_fft_bands, noverlap=hop_bands)
+
+        # Per-band energy
+        for i in range(len(band_edges) - 1):
+            flo, fhi = band_edges[i], band_edges[i+1]
+            mask = (f_enh >= flo) & (f_enh < fhi)
+            if not mask.any():
+                continue
+            e_enh = np.mean(np.abs(Zxx_enh[mask]) ** 2)
+            e_cln = np.mean(np.abs(Zxx_cln[mask]) ** 2)
+            ratio_db = 10 * np.log10(e_enh / (e_cln + 1e-30))
+            # Speech-weighted: high energy in speech formants = good
+            status = "✅" if -3 < ratio_db < 3 else "⚠️" if -6 < ratio_db < 6 else "❌"
+            print(f"    {band_names[i]:>10s}: {ratio_db:+5.1f} dB {status}")
+
+    # ── Frame-level energy tracking ──
+    print(f"\n  [Frame-level energy drift check]")
+    n_frames_est = len(enhanced_16k) // 256
+    frame_energy = []
+    for f in range(0, n_frames_est - 1):
+        seg = enhanced_16k[f*256:(f+1)*256]
+        if len(seg) == 256:
+            frame_energy.append(np.sqrt(np.mean(seg**2)))
+    if frame_energy:
+        first_e = np.mean(frame_energy[:10])
+        last_e = np.mean(frame_energy[-10:])
+        drift_db = 10 * np.log10(last_e / (first_e + 1e-30))
+        print(f"    Start RMS: {first_e:.4f}  End RMS: {last_e:.4f}  Drift: {drift_db:+.1f} dB")
+        # Check for outliers (sudden energy spikes)
+        e_arr = np.array(frame_energy)
+        spikes = np.sum(e_arr > 3 * np.median(e_arr))
+        print(f"    Energy spikes (>3x median): {spikes}/{n_frames_est} frames")
+
+    # ── Enhanced vs clean correlation per 100ms segments ──
+    print(f"\n  [Segment correlation (100ms)]:")
+    seg_len = int(target_sr * 0.1)  # 100ms
+    corrs = []
+    for start in range(0, min_len - seg_len, seg_len // 2):
+        seg_enh = enhanced_16k[start:start+seg_len]
+        seg_cln = clean_16k[start:start+seg_len]
+        if len(seg_enh) == seg_len and np.std(seg_cln) > 1e-10:
+            corr = np.corrcoef(seg_enh, seg_cln)[0, 1]
+            corrs.append(corr)
+    if corrs:
+        corrs = np.array(corrs)
+        print(f"    Mean corr: {np.mean(corrs):+.3f}  Min: {np.min(corrs):+.3f}  Max: {np.max(corrs):+.3f}")
+        bad_segs = np.sum(corrs < 0.5)
+        print(f"    Low-corr segments (r<0.5): {bad_segs}/{len(corrs)}")
+
     return p, s
 
 if __name__ == "__main__":
@@ -150,6 +239,7 @@ if __name__ == "__main__":
     clean_wav = sys.argv[2]
     work_dir = sys.argv[3]
     infer_bin = sys.argv[4] if len(sys.argv) > 4 else "./infer_audio"
+    dec_bias = sys.argv[5] if len(sys.argv) > 5 else ""  # Q20 integer
 
     print(f"=== UL-UNAS Audio Eval ===")
     print(f"  Noisy: {noisy_wav}")
@@ -164,8 +254,10 @@ if __name__ == "__main__":
     print(f"\n[2/5] C model inference ({n_frames} frames)...")
     stft_dir = work_dir  # STFT already there
     mask_dir = work_dir   # MASK output goes here too
-    ret = subprocess.run([infer_bin, stft_dir, mask_dir, str(n_frames)],
-                         capture_output=True, text=True, timeout=300)
+    cmd = [infer_bin, stft_dir, mask_dir, str(n_frames)]
+    if dec_bias:
+        cmd.append(dec_bias)
+    ret = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if ret.returncode != 0:
         print(f"  ERROR: {ret.stderr}")
         sys.exit(1)
@@ -174,7 +266,7 @@ if __name__ == "__main__":
     # Step 3: ISTFT
     print(f"\n[3/5] ISTFT synthesis...")
     out_wav = f"{work_dir}/enhanced.wav"
-    enhanced = mask_to_wav(work_dir, n_frames, out_wav, sr)
+    enhanced = mask_to_wav(work_dir, n_frames, out_wav, sr, noisy_wav)
     print(f"  Saved: {out_wav}")
 
     # Step 4: Metrics

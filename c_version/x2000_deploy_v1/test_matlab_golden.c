@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
 
     printf("=== UL-UNAS Layer SNR ===\n\n");
 
-    for(int f=0;f<2;f++){
+    for(int f=0;f<5;f++){
         /* Load STFT input */
         snprintf(p,sizeof(p),"%s/frame%d_stft_real.bin",dir,f);
         float *real_in=load_float(p,257);

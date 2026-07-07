@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 #include "ulunas_fp.h"
 #include "ulunas_matlab_weights.h"
 #include "ulunas_ctfa_qr.h"
@@ -100,40 +101,71 @@ static double run_full_chain(const float *real_in, const float *imag_in,
     return snr_db(golden_mask, crm_out, 2*257);  /* golden as signal reference */
 }
 
-/* Multi-frame evaluator helper */
+/* Multi-frame evaluator helper.
+ * When use_min=1, returns the MINIMUM across frames (worst-case optimization). */
+static int g_use_min = 0;  /* global for use in eval_multi */
+
 static double eval_multi(const float **ri, const float **ii,
                           const int32_t **gm, const int32_t **gd,
                           int n_frames, int use_mask, double dec_snr_floor,
                           double *dec_out) {
-    double sum = 0, dsum = 0;
+    double agg = g_use_min ? 1e99 : 0, dsum = 0;
     for (int f = 0; f < n_frames; f++) {
         double d;
-        sum += run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, dec_snr_floor, &d);
+        double s = run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, dec_snr_floor, &d);
+        if (g_use_min) { if (s < agg) agg = s; }
+        else agg += s;
         dsum += d;
     }
     if (dec_out) *dec_out = dsum / n_frames;
-    return sum / n_frames;
+    return g_use_min ? agg : agg / n_frames;
 }
 
-/* Coarse+fine grid search over 6 cTFA QR params, multi-frame aware */
-static double search_ctfa_6d_multi(ctfa_qr_t *qr,
+/* Coarse+fine grid search over 6 cTFA QR params, multi-frame aware.
+ * step=2: standard coarse search. step=3: fast mode (~10x fewer evals).
+ * step=0: local refinement (±2 around current values, step=1). */
+static double search_ctfa_6d_multi_step(ctfa_qr_t *qr,
                                     const float **ri, const float **ii,
                                     const int32_t **gm, const int32_t **gd,
                                     int n_frames, int use_mask, double dec_snr_floor,
-                                    double *base_out) {
+                                    double *base_out, int step) {
     double base = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
     if (base_out) *base_out = base;
 
     double best = base;
     ctfa_qr_t best_qr = *qr;
 
-    /* Coarse: step=2 */
-    for (int ta1 = -20; ta1 <= -2; ta1 += 2)
-    for (int ta2 = -14; ta2 <= -2; ta2 += 2)
-    for (int tfc = -12; tfc <= -2; tfc += 2)
-    for (int fa1 = -20; fa1 <= -2; fa1 += 2)
-    for (int fa2 = -14; fa2 <= -2; fa2 += 2)
-    for (int ffc = -12; ffc <= -2; ffc += 2) {
+    if (step == 0) {
+        /* Local refinement: ±2 around current values, step=1 */
+        int c_ta1 = qr->ta_qr1, c_ta2 = qr->ta_qr2, c_tfc = qr->ta_fc;
+        int c_fa1 = qr->fa_qr1, c_fa2 = qr->fa_qr2, c_ffc = qr->fa_fc;
+        for (int ta1 = c_ta1-2; ta1 <= c_ta1+2; ta1++)
+        for (int ta2 = c_ta2-2; ta2 <= c_ta2+2; ta2++)
+        for (int tfc = c_tfc-2; tfc <= c_tfc+2; tfc++)
+        for (int fa1 = c_fa1-2; fa1 <= c_fa1+2; fa1++)
+        for (int fa2 = c_fa2-2; fa2 <= c_fa2+2; fa2++)
+        for (int ffc = c_ffc-2; ffc <= c_ffc+2; ffc++) {
+            if (ta1 < -22 || ta1 > -2) continue;
+            if (ta2 < -22 || ta2 > -2) continue;
+            if (tfc < -22 || tfc > -2) continue;
+            if (fa1 < -22 || fa1 > -2) continue;
+            if (fa2 < -22 || fa2 > -2) continue;
+            if (ffc < -22 || ffc > -2) continue;
+            *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
+            double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
+            if (s > best) { best = s; best_qr = *qr; }
+        }
+        *qr = best_qr;
+        return best;
+    }
+
+    /* Coarse grid */
+    for (int ta1 = -20; ta1 <= -2; ta1 += step)
+    for (int ta2 = -14; ta2 <= -2; ta2 += step)
+    for (int tfc = -12; tfc <= -2; tfc += step)
+    for (int fa1 = -20; fa1 <= -2; fa1 += step)
+    for (int fa2 = -14; fa2 <= -2; fa2 += step)
+    for (int ffc = -12; ffc <= -2; ffc += step) {
         *qr = (ctfa_qr_t){ta1, ta2, tfc, fa1, fa2, ffc};
         double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
         if (s > best) { best = s; best_qr = *qr; }
@@ -155,6 +187,51 @@ static double search_ctfa_6d_multi(ctfa_qr_t *qr,
     return best;
 }
 
+static double search_ctfa_6d_multi(ctfa_qr_t *qr,
+                                    const float **ri, const float **ii,
+                                    const int32_t **gm, const int32_t **gd,
+                                    int n_frames, int use_mask, double dec_snr_floor,
+                                    double *base_out) {
+    return search_ctfa_6d_multi_step(qr, ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, base_out, 2);
+}
+
+/* 4D grid search for DPRNN GRU QR (intra_qr1, intra_qr2, inter_qr1, inter_qr2) */
+static double search_gru_qr_4d(dprnn_gru_qr_t *qr, int step,
+                                const float **ri, const float **ii,
+                                const int32_t **gm, const int32_t **gd,
+                                int n_frames, int use_mask, double dec_snr_floor,
+                                double *base_out) {
+    double base = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
+    if (base_out) *base_out = base;
+    double best = base;
+    dprnn_gru_qr_t best_qr = *qr;
+
+    if (step >= 2) {
+        /* Coarse grid: qr1 ∈ [-24,-1], qr2 ∈ [-20,-1] */
+        for (int iq1 = -24; iq1 <= -1; iq1 += step)
+        for (int iq2 = -20; iq2 <= -1; iq2 += step)
+        for (int eq1 = -24; eq1 <= -1; eq1 += step)
+        for (int eq2 = -20; eq2 <= -1; eq2 += step) {
+            *qr = (dprnn_gru_qr_t){iq1, iq2, eq1, eq2};
+            double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
+            if (s > best) { best = s; best_qr = *qr; }
+        }
+    } else {
+        /* Fine: local ±2 step=1 around best */
+        for (int iq1 = best_qr.intra_qr1-2; iq1 <= best_qr.intra_qr1+2; iq1++)
+        for (int iq2 = best_qr.intra_qr2-2; iq2 <= best_qr.intra_qr2+2; iq2++)
+        for (int eq1 = best_qr.inter_qr1-2; eq1 <= best_qr.inter_qr1+2; eq1++)
+        for (int eq2 = best_qr.inter_qr2-2; eq2 <= best_qr.inter_qr2+2; eq2++) {
+            if (iq1<-24||iq1>-1||iq2<-20||iq2>-1||eq1<-24||eq1>-1||eq2<-20||eq2>-1) continue;
+            *qr = (dprnn_gru_qr_t){iq1, iq2, eq1, eq2};
+            double s = eval_multi(ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, NULL);
+            if (s > best) { best = s; best_qr = *qr; }
+        }
+    }
+    *qr = best_qr;
+    return best;
+}
+
 /* Print QR in copy-paste ready format for ulunas_ctfa_qr.h */
 static void print_qr_macro(const char *name, ctfa_qr_t *qr, double snr, double base, double dec_snr) {
     printf("#define %-4s_TA %3d, %3d, %3d\n", name, qr->ta_qr1, qr->ta_qr2, qr->ta_fc);
@@ -163,21 +240,30 @@ static void print_qr_macro(const char *name, ctfa_qr_t *qr, double snr, double b
 }
 
 int main(int argc, char **argv) {
-    int use_mask = 0, n_frames = 1;
-    double floor_delta = 3.0;
+    int use_mask = 0, n_frames = 1, max_iters = 5;
+    double floor_delta = 3.0, conv_thresh = 0.05;
     const char *mode = "decoder";
+
+    /* Disable stdout buffering for real-time progress */
+    setvbuf(stdout, NULL, _IONBF, 0);
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--mask")) use_mask = 1;
+        else if (!strcmp(argv[i], "--min"))  g_use_min = 1;
         else if (!strncmp(argv[i], "--floor=", 8)) floor_delta = atof(argv[i]+8);
         else if (!strncmp(argv[i], "--frames=", 9)) n_frames = atoi(argv[i]+9);
+        else if (!strncmp(argv[i], "--iters=", 8)) max_iters = atoi(argv[i]+8);
+        else if (!strncmp(argv[i], "--conv=", 7))  conv_thresh = atof(argv[i]+7);
         else mode = argv[i];
     }
     if (n_frames < 1) n_frames = 1; if (n_frames > 5) n_frames = 5;
+    if (max_iters < 1) max_iters = 1; if (max_iters > 10) max_iters = 10;
 
     printf("=== Full-Chain Calibrator (zero gap, %d frames) ===\n", n_frames);
-    printf("Target: %s SNR, Mode: %s", use_mask ? "MASK" : "decoder", mode);
+    printf("Target: %s SNR%s, Mode: %s",
+           use_mask ? "MASK" : "decoder", g_use_min ? " (min)" : "", mode);
     if (use_mask) printf(", floor=baseline-%.1fdB", floor_delta);
+    if (!strcmp(mode, "iterative")) printf(", iters=%d, conv=%.3fdB", max_iters, conv_thresh);
     printf("\n\n");
 
     /* Load all frames */
@@ -191,14 +277,16 @@ int main(int argc, char **argv) {
         if (!ri[f] || !ii[f] || !gd[f] || !gm[f]) { printf("ERROR: missing frame %d\n", f); return 1; }
     }
 
-    /* Baseline: average over all frames */
-    double sum_snr = 0, sum_dec = 0;
+    /* Baseline: respect g_use_min for consistency */
+    double base_snr = g_use_min ? 1e99 : 0, sum_dec = 0;
     for (int f = 0; f < n_frames; f++) {
         double d;
-        sum_snr += run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, -999.0, &d);
+        double s = run_full_chain(ri[f], ii[f], gm[f], gd[f], use_mask, -999.0, &d);
+        if (g_use_min) { if (s < base_snr) base_snr = s; }
+        else base_snr += s;
         sum_dec += d;
     }
-    double base_snr = sum_snr / n_frames;
+    if (!g_use_min) base_snr /= n_frames;
     double dec_snr_base = sum_dec / n_frames;
     printf("Baseline (%d frames): %s=%.2f dB  dec=%.2f dB\n\n",
            n_frames, use_mask ? "mask" : "dec", base_snr, dec_snr_base);
@@ -211,6 +299,154 @@ int main(int argc, char **argv) {
     const float  *rip[5], *iip[5];
     const int32_t *gmp[5], *gdp[5];
     for (int f = 0; f < n_frames; f++) { rip[f] = ri[f]; iip[f] = ii[f]; gmp[f] = gm[f]; gdp[f] = gd[f]; }
+
+    /* ================================================================
+     * Iterative Alternating Calibration
+     * encoder→decoder→encoder→decoder until convergence
+     * ================================================================ */
+    if (!strcmp(mode, "iterative")) {
+        printf("=== Iterative Alternating (encoder→decoder→...) ===\n\n");
+
+        ctfa_qr_t *enc_qrs[] = {&g_qr_e0, &g_qr_e1, &g_qr_e2, &g_qr_e3, &g_qr_e4};
+        const char *enc_names[] = {"E0","E1","E2","E3","E4"};
+        ctfa_qr_t *dec_qrs[] = {&g_qr_d4, &g_qr_d3, &g_qr_d2, &g_qr_d1, &g_qr_d0};
+        const char *dec_names[] = {"D4","D3","D2","D1","D0"};
+
+        /* Save initial QRs for rollback */
+        ctfa_qr_t save_e0 = g_qr_e0, save_e1 = g_qr_e1, save_e2 = g_qr_e2, save_e3 = g_qr_e3, save_e4 = g_qr_e4;
+        ctfa_qr_t save_d0 = g_qr_d0, save_d1 = g_qr_d1, save_d2 = g_qr_d2, save_d3 = g_qr_d3, save_d4 = g_qr_d4;
+
+        double prev_mask = base_snr, best_mask = base_snr;
+        double best_dec;
+        eval_multi(rip, iip, gmp, gdp, n_frames, 0, -999.0, &best_dec);
+
+        for (int iter = 0; iter < max_iters; iter++) {
+            int step = (iter == 0) ? 3 : 0;  /* fast-coarse on iter 1, local refine on 2+ */
+            printf("══════ Iteration %d/%d (step=%s) ══════\n\n",
+                   iter + 1, max_iters, step == 0 ? "local" : "3");
+
+            /* ── Encoder forward: e0→e4 ── */
+            printf("── Encoder (e0→e4 forward) ──\n");
+            for (int m = 0; m < 5; m++) {
+                double base_m;
+                double best_m = search_ctfa_6d_multi_step(enc_qrs[m],
+                    rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &base_m, step);
+                double cur_d;
+                eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &cur_d);
+                printf("  %s:", enc_names[m]);
+                printf(" ta=(%d,%d,%d) fa=(%d,%d,%d)",
+                       enc_qrs[m]->ta_qr1, enc_qrs[m]->ta_qr2, enc_qrs[m]->ta_fc,
+                       enc_qrs[m]->fa_qr1, enc_qrs[m]->fa_qr2, enc_qrs[m]->fa_fc);
+                printf("  %s=%.2f (Δ=%.2f) dec=%.2f\n",
+                       use_mask ? "mask" : "dec", best_m, best_m - base_m, cur_d);
+            }
+
+            /* ── DPRNN GRU: gdprnn 0→1 ── */
+            printf("── DPRNN GRU (gdprnn 0→1) ──\n");
+            {
+                dprnn_gru_qr_t *gru_qrs[] = {&g_gru_qr_0, &g_gru_qr_1};
+                const char *gru_names[] = {"GRU0","GRU1"};
+                int gru_step = (iter == 0) ? 2 : 1;
+                for (int b = 0; b < 2; b++) {
+                    double base_m;
+                    double best_m = search_gru_qr_4d(gru_qrs[b], gru_step,
+                        rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &base_m);
+                    double cur_d;
+                    eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &cur_d);
+                    printf("  %s: intra=(%d,%d) inter=(%d,%d)  %s=%.2f (Δ=%.2f) dec=%.2f\n",
+                           gru_names[b], gru_qrs[b]->intra_qr1, gru_qrs[b]->intra_qr2,
+                           gru_qrs[b]->inter_qr1, gru_qrs[b]->inter_qr2,
+                           use_mask ? "mask" : "dec", best_m, best_m - base_m, cur_d);
+                }
+            }
+
+            /* ── Decoder backward: d4→d0 ── */
+            printf("── Decoder (d4→d0 backward) ──\n");
+            for (int m = 0; m < 5; m++) {
+                double base_m;
+                double best_m = search_ctfa_6d_multi_step(dec_qrs[m],
+                    rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &base_m, step);
+                double cur_d;
+                eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &cur_d);
+                printf("  %s:", dec_names[m]);
+                printf(" ta=(%d,%d,%d) fa=(%d,%d,%d)",
+                       dec_qrs[m]->ta_qr1, dec_qrs[m]->ta_qr2, dec_qrs[m]->ta_fc,
+                       dec_qrs[m]->fa_qr1, dec_qrs[m]->fa_qr2, dec_qrs[m]->fa_fc);
+                printf("  %s=%.2f (Δ=%.2f) dec=%.2f\n",
+                       use_mask ? "mask" : "dec", best_m, best_m - base_m, cur_d);
+            }
+
+            /* ── Evaluate iteration ── */
+            double cur_mask, cur_dec;
+            cur_mask = eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &cur_dec);
+            double cur_dec_only;
+            eval_multi(rip, iip, gmp, gdp, n_frames, 0, -999.0, &cur_dec_only);
+
+            double delta = cur_mask - prev_mask;
+            printf("\n── Iter %d result: %s=%.2f dB  dec=%.2f dB  (Δ=%+.3f dB)",
+                   iter + 1, use_mask ? "MASK" : "dec", cur_mask,
+                   use_mask ? cur_dec : cur_mask, delta);
+
+            int is_best = 0;
+            if (cur_mask > best_mask + 0.001) {
+                best_mask = cur_mask;
+                best_dec = cur_dec_only;
+                is_best = 1;
+                /* Save best QRs */
+                save_e0 = g_qr_e0; save_e1 = g_qr_e1; save_e2 = g_qr_e2; save_e3 = g_qr_e3; save_e4 = g_qr_e4;
+                save_d0 = g_qr_d0; save_d1 = g_qr_d1; save_d2 = g_qr_d2; save_d3 = g_qr_d3; save_d4 = g_qr_d4;
+                printf("  ★ NEW BEST");
+            }
+            printf("\n");
+
+            /* Convergence check */
+            if (iter > 0 && fabs(delta) < conv_thresh) {
+                printf("  Converged: |Δ|=%.3f < %.3f dB threshold\n\n", fabs(delta), conv_thresh);
+                break;
+            }
+            prev_mask = cur_mask;
+            printf("\n");
+        }
+
+        /* Restore best QRs if final iteration degraded */
+        if (best_mask > prev_mask + 0.001) {
+            printf("── Rolling back to best (iter with %s=%.2f dB) ──\n\n",
+                   use_mask ? "MASK" : "dec", best_mask);
+            g_qr_e0 = save_e0; g_qr_e1 = save_e1; g_qr_e2 = save_e2; g_qr_e3 = save_e3; g_qr_e4 = save_e4;
+            g_qr_d0 = save_d0; g_qr_d1 = save_d1; g_qr_d2 = save_d2; g_qr_d3 = save_d3; g_qr_d4 = save_d4;
+        }
+
+        printf("═══ Iterative complete: best %s=%.2f dB  dec=%.2f dB ═══\n\n",
+               use_mask ? "MASK" : "dec", best_mask, best_dec);
+    }
+
+    /* ================================================================
+     * DPRNN GRU QR calibration (gdprnn 0 → 1, sequential)
+     * ================================================================ */
+    if (!strcmp(mode, "dprnn") || !strcmp(mode, "all")) {
+        printf("=== DPRNN GRU QR (gdprnn 0→1) ===\n\n");
+
+        dprnn_gru_qr_t *gru_qrs[] = {&g_gru_qr_0, &g_gru_qr_1};
+        const char *gru_names[] = {"GDPRNN0", "GDPRNN1"};
+
+        for (int b = 0; b < 2; b++) {
+            double base;
+            /* step=2 for thorough search */
+            double best = search_gru_qr_4d(gru_qrs[b], 2,
+                rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &base);
+            /* fine: step=1 around best */
+            best = search_gru_qr_4d(gru_qrs[b], 1,
+                rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, NULL);
+
+            double d;
+            eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &d);
+            printf("%s: intra=(%d,%d) inter=(%d,%d)\n",
+                   gru_names[b], gru_qrs[b]->intra_qr1, gru_qrs[b]->intra_qr2,
+                   gru_qrs[b]->inter_qr1, gru_qrs[b]->inter_qr2);
+            printf("  %s=%.2f dB (Δ=%+.2f)  dec=%.2f\n\n",
+                   use_mask ? "mask" : "dec", best, best - base, d);
+        }
+    }
 
     /* ================================================================
      * Decoder cTFA calibration (backward: d4→d0)
@@ -326,6 +562,10 @@ int main(int argc, char **argv) {
     printf("#define D4_TCONV_CQR %d\n", g_d4_tconv.conv_qr);
     printf("#define D4_TCONV_BN1 %d\n", g_d4_tconv.bn_qr1);
     printf("#define D4_TCONV_BN2 %d\n", g_d4_tconv.bn_qr2);
+    printf("#define GRU0_INTRA %d, %d\n", g_gru_qr_0.intra_qr1, g_gru_qr_0.intra_qr2);
+    printf("#define GRU0_INTER %d, %d\n", g_gru_qr_0.inter_qr1, g_gru_qr_0.inter_qr2);
+    printf("#define GRU1_INTRA %d, %d\n", g_gru_qr_1.intra_qr1, g_gru_qr_1.intra_qr2);
+    printf("#define GRU1_INTER %d, %d\n", g_gru_qr_1.inter_qr1, g_gru_qr_1.inter_qr2);
 
     double final_snr = eval_multi(rip, iip, gmp, gdp, n_frames, use_mask, dec_snr_floor, &dec_snr_base);
     printf("\nFinal (%d frames): %s=%.2f dB  dec=%.2f dB\n",

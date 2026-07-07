@@ -23,30 +23,41 @@ HOP = N_FFT // 2           # 256 (50% overlap)
 WINDOW = np.hanning(N_FFT)
 
 def wav_to_stft(wav_path, work_dir):
-    """Read wav, compute STFT, save frames to binary."""
+    """Read wav, compute STFT, save frames to binary.
+    Mirror-padding matches MATLAB STFT_func.m: flip(x(2:257)) x flip(x(end-255:end-1))."""
     audio, sr = sf.read(wav_path)
     if audio.ndim > 1:
         audio = audio[:, 0]  # mono
     audio = audio.astype(np.float32)
 
-    # Pad to integer number of frames
-    n_frames = (len(audio) - N_FFT) // HOP + 1
+    # Mirror padding: matches MATLAB's STFT_func pad_len=N_fft/2=256
+    # Front: flip(x[1:257])  Back: flip(x[end-256:end-1])
+    pad_len = N_FFT // 2  # 256
+    if len(audio) > pad_len + 1:
+        front_pad = audio[1:pad_len+1][::-1]  # flip(x(2:pad_len+1))
+        back_pad = audio[-pad_len-1:-1][::-1]  # flip(x(end-pad_len:end-1))
+    else:
+        front_pad = np.zeros(pad_len, dtype=np.float32)
+        back_pad = np.zeros(pad_len, dtype=np.float32)
+    audio_padded = np.concatenate([front_pad, audio, back_pad])
+
+    # Number of frames from padded signal
+    total_len = len(audio_padded)
+    n_frames = (total_len - N_FFT) // HOP + 1
     if n_frames <= 0:
         n_frames = 1
-    padded_len = (n_frames - 1) * HOP + N_FFT
-    audio = np.pad(audio, (0, max(0, padded_len - len(audio))))
 
     os.makedirs(work_dir, exist_ok=True)
     for f in range(n_frames):
         start = f * HOP
-        frame = audio[start:start + N_FFT] * WINDOW
+        frame = audio_padded[start:start + N_FFT] * WINDOW
         spec = np.fft.rfft(frame)  # complex, 257 bins
         real_part = spec.real.astype(np.float32)
         imag_part = spec.imag.astype(np.float32)
         real_part.tofile(f"{work_dir}/frame{f}_stft_real.bin")
         imag_part.tofile(f"{work_dir}/frame{f}_stft_imag.bin")
 
-    return audio, sr, n_frames
+    return audio_padded, sr, n_frames
 
 def mask_to_wav(work_dir, n_frames, out_wav, sr):
     """Read MASK output (complex Q20 int32), convert to float, ISTFT."""

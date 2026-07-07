@@ -15,6 +15,7 @@
 #include "ulunas_fp.h"
 #include "ulunas_matlab_weights.h"
 #include "ulunas_ctfa_qr.h"
+#include <stdio.h>
 
 /* ================================================================
  * Global cTFA QR Configuration (for calibration tools)
@@ -240,6 +241,11 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
 
     shuffle_interleave(y_pconv,12,33,y_shuf);
 
+#ifdef DIAG_E2
+    { FILE *f=fopen("diag_e2_pconv.bin","wb"); fwrite(y_pconv,4,24*33,f); fclose(f); }
+    { FILE *f=fopen("diag_e2_shuf.bin","wb"); fwrite(y_shuf,4,24*33,f); fclose(f); }
+#endif
+
     /* Calibrated: conv_qr=-14 bn_qr1=-17 bn_qr2=-14 (was -13,-14,-14) */
     TConv_block(y_shuf,conv_cache,24,24,33,33,2,3,1,1,CACHE_XDWS0_ROWS, -14, 24, -17, -14,
                 encoder_en_convs_2_dconv_1_weight,encoder_en_convs_2_dconv_1_bias,
@@ -247,6 +253,10 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
                 encoder_en_convs_2_dconv_2_running_mean,encoder_en_convs_2_dconv_2_running_var,
                 encoder_en_convs_2_dconv_3_affine_weight,encoder_en_convs_2_dconv_3_affine_bias,
                 encoder_en_convs_2_dconv_3_slope_weight,y_tconv);
+
+#ifdef DIAG_E2
+    { FILE *f=fopen("diag_e2_tconv.bin","wb"); fwrite(y_tconv,4,24*33,f); fclose(f); }
+#endif
 
     uint16_t ta_gate[24]; int32_t fa_gate[24*33];
     cTFA_ta_module(y_tconv,24,33,CTA_XMB0_HID,  /* calibrated ta=-19,-3,-23 */
@@ -284,7 +294,15 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
       affine_prelu_fixed(y_pconv0,32,33,encoder_en_convs_3_pconv1_2_affine_weight,
                          encoder_en_convs_3_pconv1_2_affine_bias,encoder_en_convs_3_pconv1_2_slope_weight,-13,-13); }
 
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_pconv0.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }
+#endif
+
     shuffle_interleave(y_pconv0,16,33,y_shuf);
+
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_shuf.bin","wb"); fwrite(y_shuf,4,32*33,f); fclose(f); }
+#endif
 
     /* Calibrated: conv_qr=-13 bn_qr1=-18 bn_qr2=-14 */
     nonTConv_block(y_shuf,32,32,33,33,1,5,1,32,-13,-18,-14,
@@ -294,6 +312,10 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
                    encoder_en_convs_3_dconv_3_affine_weight,encoder_en_convs_3_dconv_3_affine_bias,
                    encoder_en_convs_3_dconv_3_slope_weight,y_tconv);
 
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_tconv.bin","wb"); fwrite(y_tconv,4,32*33,f); fclose(f); }
+#endif
+
     /* PConv1: grouped 16→16 per group, total 32→32, qr=-14, BN only */
     { int32_t y0[16*33], y1[16*33];
       pconv2d_fixed(y_tconv,16,33,encoder_en_convs_3_pconv2_0_weight,encoder_en_convs_3_pconv2_0_bias,16,-14,y0);
@@ -301,6 +323,10 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
       for(int c=0;c<16;c++){memcpy(y_pconv1+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv1+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv1,32,33,encoder_en_convs_3_pconv2_1_weight,encoder_en_convs_3_pconv2_1_bias,
                encoder_en_convs_3_pconv2_1_running_mean,encoder_en_convs_3_pconv2_1_running_var,-14,-14); }
+
+#ifdef DIAG_E3
+    { FILE *f=fopen("diag_e3_pconv1.bin","wb"); fwrite(y_pconv1,4,32*33,f); fclose(f); }
+#endif
 
     /* cTFA: Qr=-13,-8, fc_shift=-8 */
     uint16_t ta_gate[32]; int32_t fa_gate[32*33];

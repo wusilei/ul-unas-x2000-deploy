@@ -12,6 +12,9 @@
 #include <string.h>
 #include <math.h>
 #include "ulunas_fp.h"
+#include "qr_config.h"
+#include "layer_dims.h"
+#include "ulunas_matlab_weights.h"
 #include "ulunas_matlab_weights.h"
 
 /* ================================================================
@@ -167,6 +170,121 @@ int main(int argc, char **argv) {
                    snr, max_abs_err_i32(gbm, x_bm, 129), status(snr));
             tested++; if (snr > 80.0) passed++;
             free(gbm);
+        }
+
+        /* Step 3a: E0 sub-block golden (before encoder to use correct cache state) */
+        {
+            int W_in = 129;
+            int32_t x_c[3 * 129];
+            memcpy(x_c, st.conv_cache_e0, 2 * W_in * sizeof(int32_t));
+            memcpy(x_c + 2 * W_in, x_bm, 1 * W_in * sizeof(int32_t));
+
+            /* Save cache for restoration */
+            int32_t saved_conv_e0[2 * 129];
+            int16_t saved_tfa_e0[24];
+            memcpy(saved_conv_e0, st.conv_cache_e0, sizeof(saved_conv_e0));
+            memcpy(saved_tfa_e0, st.tfa_cache_e0, sizeof(saved_tfa_e0));
+
+            /* E0.1: TConv */
+            int32_t y_tconv[12 * 65];
+            conv2d_func(x_c, 1, 12, 1, 65, 3, 3, 1, 2,
+                        encoder_en_convs_0_ops_1_weight, encoder_en_convs_0_ops_1_bias,
+                        E0_TCONV_CONV_QR, y_tconv);
+
+            /* E0.2: BN */
+            int32_t y_bn[12 * 65];
+            bn_func(y_tconv, encoder_en_convs_0_ops_2_weight, encoder_en_convs_0_ops_2_bias,
+                    encoder_en_convs_0_ops_2_running_mean, encoder_en_convs_0_ops_2_running_var,
+                    E0_TCONV_BN_QR1, E0_TCONV_BN_QR2, 12, 12 * 65, y_bn);
+
+            /* E0.3: AffinePReLU */
+            int32_t y_ap[12 * 65];
+            affineprelu_func(y_bn, encoder_en_convs_0_ops_3_affine_weight,
+                             encoder_en_convs_0_ops_3_affine_bias,
+                             encoder_en_convs_0_ops_3_slope_weight,
+                             E0_TCONV_AFFINE_QR1, E0_TCONV_AFFINE_QR2, 12, 65, y_ap);
+
+            /* Check TConv+BN+AffinePReLU golden */
+            snprintf(path, sizeof(path), "%s/frame%d_enc_e0_ctfa_in.bin", dir, frame);
+            int32_t *g_ctfa_in = load_int32(path, 12 * 65);
+            if (g_ctfa_in) {
+                double snr = snr_db_2d_i32(g_ctfa_in, y_ap, 12, 65);
+                printf("  E0.tconv : SNR=%7.2f dB  MAX=%6.1f  [%s]\n",
+                       snr, max_abs_err_i32(g_ctfa_in, y_ap, 12 * 65), status(snr));
+                free(g_ctfa_in);
+            }
+
+            /* E0.4: cTFA TA */
+            uint16_t y_ta[12];
+            ctfa_ta_module(y_ap, 12, 65, E0_CTFA_TA_GRU_NHID,
+                           st.tfa_cache_e0,
+                           encoder_en_convs_0_ops_4_ta_gru_weight_ih_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_bias_ih_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_weight_hh_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_bias_hh_l0,
+                           encoder_en_convs_0_ops_4_ta_fc_weight,
+                           encoder_en_convs_0_ops_4_ta_fc_bias,
+                           E0_CTFA_TA_GRU_QR1, E0_CTFA_TA_GRU_QR2, E0_CTFA_TA_FC_QR, y_ta);
+
+            snprintf(path, sizeof(path), "%s/frame%d_enc_e0_ctfa_ta.bin", dir, frame);
+            uint16_t *g_ta = load_uint16(path, 12);
+            if (g_ta) {
+                double snr = snr_db_u16(g_ta, y_ta, 12);
+                printf("  E0.ta    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_ta);
+            }
+
+            /* E0.5: cTFA FA */
+            uint16_t y_fa[65];
+            ctfa_fa_module(y_ap, 12, 65, E0_CTFA_FA_GRU_NHID,
+                           E0_CTFA_FA_GROUP, E0_CTFA_FA_SEG, E0_CTFA_FA_PAD,
+                           encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,
+                           encoder_en_convs_0_ops_4_fa_gru_bias_ih_l0,
+                           encoder_en_convs_0_ops_4_fa_gru_weight_hh_l0,
+                           encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0,
+                           encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0_reverse,
+                           encoder_en_convs_0_ops_4_fa_gru_bias_ih_l0_reverse,
+                           encoder_en_convs_0_ops_4_fa_gru_weight_hh_l0_reverse,
+                           encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0_reverse,
+                           encoder_en_convs_0_ops_4_fa_fc_weight,
+                           encoder_en_convs_0_ops_4_fa_fc_bias,
+                           E0_CTFA_FA_GRU_QR1, E0_CTFA_FA_GRU_QR2, E0_CTFA_FA_FC_QR, y_fa);
+
+            snprintf(path, sizeof(path), "%s/frame%d_enc_e0_ctfa_fa.bin", dir, frame);
+            uint16_t *g_fa = load_uint16(path, 65);
+            if (g_fa) {
+                double snr = snr_db_u16(g_fa, y_fa, 65);
+                printf("  E0.fa    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_fa);
+            }
+
+            /* E0.6: cTFA fusion */
+            int32_t y_ctfa[12 * 65];
+            int64_t r_f = 16384;
+            for (int c = 0; c < 12; c++) {
+                for (int w = 0; w < 65; w++) {
+                    int64_t p1 = (int64_t)y_ap[c * 65 + w] * y_ta[c];
+                    int32_t yt;
+                    if (p1 >= 0) yt = (int32_t)((p1 + r_f) >> 15);
+                    else         yt = (int32_t)((p1 - r_f) >> 15);
+                    int64_t p2 = (int64_t)yt * y_fa[w];
+                    if (p2 >= 0) y_ctfa[c * 65 + w] = (int32_t)((p2 + r_f) >> 15);
+                    else         y_ctfa[c * 65 + w] = (int32_t)((p2 - r_f) >> 15);
+                }
+            }
+
+            snprintf(path, sizeof(path), "%s/frame%d_enc_e0_ctfa_out.bin", dir, frame);
+            int32_t *g_ctfa_out = load_int32(path, 12 * 65);
+            if (g_ctfa_out) {
+                double snr = snr_db_2d_i32(g_ctfa_out, y_ctfa, 12, 65);
+                printf("  E0.ctfa  : SNR=%7.2f dB  MAX=%6.1f  [%s]\n",
+                       snr, max_abs_err_i32(g_ctfa_out, y_ctfa, 12 * 65), status(snr));
+                free(g_ctfa_out);
+            }
+
+            /* Restore cache so encoder_module starts from correct state */
+            memcpy(st.conv_cache_e0, saved_conv_e0, sizeof(saved_conv_e0));
+            memcpy(st.tfa_cache_e0, saved_tfa_e0, sizeof(saved_tfa_e0));
         }
 
         /* Step 3: Encoder */

@@ -85,8 +85,8 @@ d4_tconv_qr_t g_d4_tconv = {-14, -11, -11};  /* conv_qr, bn_qr1, bn_qr2 */
 #endif /* JOINT_CALIBRATION_MODE */
 
 /* DPRNN GRU QR variables (always defined, modified by calibrator in QR_CALIBRATION_MODE) */
-dprnn_gru_qr_t g_gru_qr_0 = {-13, -13, -13, -13};  /* best Q13-theoretical so far */
-dprnn_gru_qr_t g_gru_qr_1 = {-13, -13, -13, -13};
+dprnn_gru_qr_t g_gru_qr_0 = {-13, -8, -13, -8};    /* ih=Q20→Q33>>13=Q20, hh=Q15→Q28>>8=Q20 */
+dprnn_gru_qr_t g_gru_qr_1 = {-13, -8, -13, -8};
 
 /* DPRNN GRU QR macros — calibration mode uses globals, else hardcoded */
 #ifdef QR_CALIBRATION_MODE
@@ -100,13 +100,13 @@ dprnn_gru_qr_t g_gru_qr_1 = {-13, -13, -13, -13};
 #define GRU1_INTER_QR2 g_gru_qr_1.inter_qr2
 #else
 #define GRU0_INTRA_QR1 -13
-#define GRU0_INTRA_QR2 -13
+#define GRU0_INTRA_QR2 -8    /* hh path: Q15×Q13=Q28>>8=Q20 */
 #define GRU0_INTER_QR1 -13
-#define GRU0_INTER_QR2 -13
+#define GRU0_INTER_QR2 -8
 #define GRU1_INTRA_QR1 -13
-#define GRU1_INTRA_QR2 -13
+#define GRU1_INTRA_QR2 -8
 #define GRU1_INTER_QR1 -13
-#define GRU1_INTER_QR2 -13
+#define GRU1_INTER_QR2 -8
 #endif /* QR_CALIBRATION_MODE for GRU */
 
 /* D4 TConv QR macros */
@@ -284,10 +284,10 @@ void XDWS0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
 void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
     int32_t y_pconv0[32*33], y_shuf[32*33], y_tconv[32*33], y_pconv1[32*33];
 
-    /* PConv0: grouped 12→16 per group, qr=-18 (sweep-optimized) */
+    /* PConv0: grouped 12→16 per group, qr=-13 (Q20×Q14=Q34>>13=Q21≈Q20, matches BN) */
     { int32_t y0[16*33], y1[16*33];
-      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-18,y0);
-      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-18,y1);
+      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-13,y0);
+      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-13,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
 #ifdef DIAG_E3
       { FILE *f=fopen("diag_e3_conv.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }

@@ -124,12 +124,11 @@ void gconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
                   int32_t *cache, int32_t *y) {
     int shift = -Qr;
     int64_t round_const = ((int64_t)1 << (shift - 1));
-    int cache_h = Kh - 1;  /* cache has Kh-1 rows (e.g., 1 for 2×3 kernel) */
-    int cache_w = Wout;
-    /* Input width: for standard conv with stride and pad=1,
-     * Wout = (Wx + 2*pad - Kw) / stride_w + 1 = (Wx - Kw + 2) / stride_w + 1
-     * → Wx = (Wout - 1) * stride_w + Kw - 2 */
-    int Wx = (Wout - 1) * stride_w + Kw - 2;
+    int cache_h = Kh - 1;  /* cache rows (e.g., 1 for 2×3 kernel) */
+    /* cache_w = actual width of cached input frames (Wx, not Wout) */
+    int pad_w = (Kw - 1) / 2;
+    int Wx = (Wout - 1) * stride_w + Kw - 2 * pad_w;  /* input width */
+    int cache_w = Wx;  /* cache same width as input */
 
     for (int nOut = 0; nOut < Cout; nOut++) {
         for (int w = 0; w < Wout; w++) {

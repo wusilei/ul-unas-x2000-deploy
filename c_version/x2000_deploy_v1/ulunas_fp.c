@@ -97,14 +97,14 @@ void tconv2d_fixed(const int32_t *x, int Cin, int Win,
  */
 void pconv2d_fixed(const int32_t *x, int Cin, int Win,
                    const int16_t *weight, const int32_t *bias,
-                   int Cout, int qr,
+                   int Cout, int stride, int qr,
                    int32_t *y) {
     for (int co = 0; co < Cout; co++) {
         for (int w = 0; w < Win; w++) {
             int64_t acc = bias[co];
             for (int ci = 0; ci < Cin; ci++) {
                 int32_t xv = x[ci * Win + w];
-                int16_t kv = weight[co + Cout * ci];  /* col-major (Cout, Cin) */
+                int16_t kv = weight[co + stride * ci];  /* stride for grouped convs */
                 int64_t prod = (int64_t)xv * (int64_t)kv;
                 int shift = -qr;
                 prod = (prod + ((int64_t)1 << (shift - 1))) >> shift;
@@ -1098,16 +1098,19 @@ void PConv_block(const int32_t *x, int Cin, int Cout, int Win,
                  const int16_t *affine_w, const int32_t *affine_b,
                  const int16_t *slope_w,
                  int32_t *y) {
-    /* pconv2d is grouped: (Cin/2, Cin/2) per group → treated as 2 separate pconv2d calls */
+    /* pconv2d is grouped: (Cin/2, Cin/2) per group.
+     * weight matrix: (Cout, Cin_half) — full output × half input = 2 groups packed.
+     * stride = Cout (full output channels, to skip group 1 rows in each column).
+     * Group 1 weight offset = Cout_half (skip first half of output rows). */
     int Cin_half = Cin / 2;
     int Cout_half = Cout / 2;
     int32_t *y0 = (int32_t *)calloc(Cout_half * Win, sizeof(int32_t));
     int32_t *y1 = (int32_t *)calloc(Cout_half * Win, sizeof(int32_t));
 
-    pconv2d_fixed(x, Cin_half, Win, conv_w, conv_b, Cout_half, -14, y0);
+    pconv2d_fixed(x, Cin_half, Win, conv_w, conv_b, Cout_half, Cout, -14, y0);
     pconv2d_fixed(x + Cin_half * Win, Cin_half, Win,
-                  conv_w + Cout_half * Cin_half, conv_b + Cout_half,
-                  Cout_half, -14, y1);
+                  conv_w + Cout_half, conv_b + Cout_half,
+                  Cout_half, Cout, -14, y1);
 
     /* Interleave: y = [y0; y1] */
     for (int c = 0; c < Cout_half; c++) {

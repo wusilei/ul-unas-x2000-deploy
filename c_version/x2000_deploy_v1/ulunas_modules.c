@@ -196,9 +196,9 @@ void XMB0_module(const int32_t *x, int32_t *conv_cache, int16_t *ta_h,
     /* PConv1: grouped pconv2d(qr=-14) + BN(qr1=-14,qr2=-14) — NO AffinePReLU */
     { int32_t y0[12*33], y1[12*33];
       pconv2d_fixed(y_tconv, 12, 33, encoder_en_convs_1_pconv2_0_weight,
-                    encoder_en_convs_1_pconv2_0_bias, 12, -14, y0);
-      pconv2d_fixed(y_tconv+12*33, 12, 33, encoder_en_convs_1_pconv2_0_weight+12*12,
-                    encoder_en_convs_1_pconv2_0_bias+12, 12, -14, y1);
+                    encoder_en_convs_1_pconv2_0_bias, 12, 24, -14, y0);
+      pconv2d_fixed(y_tconv+12*33, 12, 33, encoder_en_convs_1_pconv2_0_weight+12,
+                    encoder_en_convs_1_pconv2_0_bias+12, 12, 24, -14, y1);
       for(int c=0;c<12;c++){memcpy(y_pconv1+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv1+(12+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv1,24,33,encoder_en_convs_1_pconv2_1_weight,encoder_en_convs_1_pconv2_1_bias,
                encoder_en_convs_1_pconv2_1_running_mean,encoder_en_convs_1_pconv2_1_running_var,-14,-14); }
@@ -286,8 +286,8 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
 
     /* PConv0: grouped 12→16 per group, qr=-13 (Q20×Q14=Q34>>13=Q21≈Q20, matches BN) */
     { int32_t y0[16*33], y1[16*33];
-      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,-13,y0);
-      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16*12,encoder_en_convs_3_pconv1_0_bias+16,16,-13,y1);
+      pconv2d_fixed(x,12,33,encoder_en_convs_3_pconv1_0_weight,encoder_en_convs_3_pconv1_0_bias,16,32,-13,y0);
+      pconv2d_fixed(x+12*33,12,33,encoder_en_convs_3_pconv1_0_weight+16,encoder_en_convs_3_pconv1_0_bias+16,16,32,-13,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
 #ifdef DIAG_E3
       { FILE *f=fopen("diag_e3_conv.bin","wb"); fwrite(y_pconv0,4,32*33,f); fclose(f); }
@@ -324,8 +324,8 @@ void XMB1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
 
     /* PConv1: grouped 16→16 per group, total 32→32, qr=-14, BN only */
     { int32_t y0[16*33], y1[16*33];
-      pconv2d_fixed(y_tconv,16,33,encoder_en_convs_3_pconv2_0_weight,encoder_en_convs_3_pconv2_0_bias,16,-14,y0);
-      pconv2d_fixed(y_tconv+16*33,16,33,encoder_en_convs_3_pconv2_0_weight+16*16,encoder_en_convs_3_pconv2_0_bias+16,16,-14,y1);
+      pconv2d_fixed(y_tconv,16,33,encoder_en_convs_3_pconv2_0_weight,encoder_en_convs_3_pconv2_0_bias,16,32,-14,y0);
+      pconv2d_fixed(y_tconv+16*33,16,33,encoder_en_convs_3_pconv2_0_weight+16,encoder_en_convs_3_pconv2_0_bias+16,16,32,-14,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv1+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv1+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv1,32,33,encoder_en_convs_3_pconv2_1_weight,encoder_en_convs_3_pconv2_1_bias,
                encoder_en_convs_3_pconv2_1_running_mean,encoder_en_convs_3_pconv2_1_running_var,-14,-14); }
@@ -373,8 +373,8 @@ void XDWS1_module(const int32_t *x, int16_t *ta_h, int32_t *y) {
 
     /* PConv: group0: Cin=16→Cout=8, group1: Cin=16→Cout=8, total 32→16, qr=-14 */
     { int32_t y0[8*33], y1[8*33];
-      pconv2d_fixed(x,16,33,encoder_en_convs_4_pconv_0_weight,encoder_en_convs_4_pconv_0_bias,8,-14,y0);
-      pconv2d_fixed(x+16*33,16,33,encoder_en_convs_4_pconv_0_weight+8*16,encoder_en_convs_4_pconv_0_bias+8,8,-14,y1);
+      pconv2d_fixed(x,16,33,encoder_en_convs_4_pconv_0_weight,encoder_en_convs_4_pconv_0_bias,8,16,-14,y0);
+      pconv2d_fixed(x+16*33,16,33,encoder_en_convs_4_pconv_0_weight+8,encoder_en_convs_4_pconv_0_bias+8,8,16,-14,y1);
       for(int c=0;c<8;c++){memcpy(y_pconv+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv+(8+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv,16,33,encoder_en_convs_4_pconv_1_weight,encoder_en_convs_4_pconv_1_bias,
                encoder_en_convs_4_pconv_1_running_mean,encoder_en_convs_4_pconv_1_running_var,-11,-14);
@@ -440,8 +440,8 @@ void De_XDWS0_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv: grouped 16→16 per group, Cin=8+8 per half (total Cin=16, Cout=32) */
     { int32_t y0[16*33], y1[16*33];
-      pconv2d_fixed(x_cat,8,33,decoder_de_convs_0_pconv_0_weight,decoder_de_convs_0_pconv_0_bias,16,-14,y0);
-      pconv2d_fixed(x_cat+8*33,8,33,decoder_de_convs_0_pconv_0_weight+16*8,decoder_de_convs_0_pconv_0_bias+16,16,-14,y1);
+      pconv2d_fixed(x_cat,8,33,decoder_de_convs_0_pconv_0_weight,decoder_de_convs_0_pconv_0_bias,16,32,-14,y0);
+      pconv2d_fixed(x_cat+8*33,8,33,decoder_de_convs_0_pconv_0_weight+16,decoder_de_convs_0_pconv_0_bias+16,16,32,-14,y1);
       for(int c=0;c<16;c++){memcpy(y_pconv+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv+(16+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv,32,33,decoder_de_convs_0_pconv_1_weight,decoder_de_convs_0_pconv_1_bias,
                decoder_de_convs_0_pconv_1_running_mean,decoder_de_convs_0_pconv_1_running_var,-14,-14);
@@ -502,8 +502,8 @@ void De_XMB0_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv0: Cin=16 per group, Cout=12 per group → total 32→24 */
     { int32_t y0[12*33], y1[12*33];
-      pconv2d_fixed(x_cat,16,33,decoder_de_convs_1_pconv1_0_weight,decoder_de_convs_1_pconv1_0_bias,12,-13,y0);
-      pconv2d_fixed(x_cat+16*33,16,33,decoder_de_convs_1_pconv1_0_weight+12*16,decoder_de_convs_1_pconv1_0_bias+12,12,-13,y1);
+      pconv2d_fixed(x_cat,16,33,decoder_de_convs_1_pconv1_0_weight,decoder_de_convs_1_pconv1_0_bias,12,24,-13,y0);
+      pconv2d_fixed(x_cat+16*33,16,33,decoder_de_convs_1_pconv1_0_weight+12,decoder_de_convs_1_pconv1_0_bias+12,12,24,-13,y1);
       for(int c=0;c<12;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(12+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv0,24,33,decoder_de_convs_1_pconv1_1_weight,decoder_de_convs_1_pconv1_1_bias,
                decoder_de_convs_1_pconv1_1_running_mean,decoder_de_convs_1_pconv1_1_running_var,-11,-14);
@@ -523,8 +523,8 @@ void De_XMB0_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv1: grouped 12→12, qr=-14, BN only qr1=-11,qr2=-11 */
     { int32_t y0[12*33], y1[12*33];
-      pconv2d_fixed(y_tconv,12,33,decoder_de_convs_1_pconv2_0_weight,decoder_de_convs_1_pconv2_0_bias,12,-14,y0);
-      pconv2d_fixed(y_tconv+12*33,12,33,decoder_de_convs_1_pconv2_0_weight+12*12,decoder_de_convs_1_pconv2_0_bias+12,12,-14,y1);
+      pconv2d_fixed(y_tconv,12,33,decoder_de_convs_1_pconv2_0_weight,decoder_de_convs_1_pconv2_0_bias,12,24,-14,y0);
+      pconv2d_fixed(y_tconv+12*33,12,33,decoder_de_convs_1_pconv2_0_weight+12,decoder_de_convs_1_pconv2_0_bias+12,12,24,-14,y1);
       for(int c=0;c<12;c++){memcpy(y_pconv1+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv1+(12+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv1,24,33,decoder_de_convs_1_pconv2_1_weight,decoder_de_convs_1_pconv2_1_bias,
                decoder_de_convs_1_pconv2_1_running_mean,decoder_de_convs_1_pconv2_1_running_var,-11,-11); }
@@ -567,8 +567,8 @@ void De_XDWS1_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv: grouped 12→12 per group (Cin=12,Cout=12 per half), qr=-14 */
     { int32_t y0[12*33], y1[12*33];
-      pconv2d_fixed(x_cat,12,33,decoder_de_convs_2_pconv_0_weight,decoder_de_convs_2_pconv_0_bias,12,-14,y0);
-      pconv2d_fixed(x_cat+12*33,12,33,decoder_de_convs_2_pconv_0_weight+12*12,decoder_de_convs_2_pconv_0_bias+12,12,-14,y1);
+      pconv2d_fixed(x_cat,12,33,decoder_de_convs_2_pconv_0_weight,decoder_de_convs_2_pconv_0_bias,12,24,-14,y0);
+      pconv2d_fixed(x_cat+12*33,12,33,decoder_de_convs_2_pconv_0_weight+12,decoder_de_convs_2_pconv_0_bias+12,12,24,-14,y1);
       for(int c=0;c<12;c++){memcpy(y_pconv+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv+(12+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv,24,33,decoder_de_convs_2_pconv_1_weight,decoder_de_convs_2_pconv_1_bias,
                decoder_de_convs_2_pconv_1_running_mean,decoder_de_convs_2_pconv_1_running_var,-11,-14);
@@ -624,8 +624,8 @@ void De_XMB1_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv0: Cin=12 per group, Cout=6 per group → total 24→12, qr=-14 */
     { int32_t y0[6*33], y1[6*33];
-      pconv2d_fixed(x_cat,12,33,decoder_de_convs_3_pconv1_0_weight,decoder_de_convs_3_pconv1_0_bias,6,-14,y0);
-      pconv2d_fixed(x_cat+12*33,12,33,decoder_de_convs_3_pconv1_0_weight+6*12,decoder_de_convs_3_pconv1_0_bias+6,6,-14,y1);
+      pconv2d_fixed(x_cat,12,33,decoder_de_convs_3_pconv1_0_weight,decoder_de_convs_3_pconv1_0_bias,6,12,-14,y0);
+      pconv2d_fixed(x_cat+12*33,12,33,decoder_de_convs_3_pconv1_0_weight+6,decoder_de_convs_3_pconv1_0_bias+6,6,12,-14,y1);
       for(int c=0;c<6;c++){memcpy(y_pconv0+c*33,y0+c*33,33*sizeof(int32_t));memcpy(y_pconv0+(6+c)*33,y1+c*33,33*sizeof(int32_t));}
       bn_fixed(y_pconv0,12,33,decoder_de_convs_3_pconv1_1_weight,decoder_de_convs_3_pconv1_1_bias,
                decoder_de_convs_3_pconv1_1_running_mean,decoder_de_convs_3_pconv1_1_running_var,-11,-14);
@@ -645,8 +645,8 @@ void De_XMB1_module(const int32_t *x, const int32_t *x_skip,
 
     /* PConv1: grouped 6→6, qr=-14, BN only qr1=-11,qr2=-11 */
     { int32_t y0[6*65], y1[6*65];
-      pconv2d_fixed(y_tconv,6,65,decoder_de_convs_3_pconv2_0_weight,decoder_de_convs_3_pconv2_0_bias,6,-14,y0);
-      pconv2d_fixed(y_tconv+6*65,6,65,decoder_de_convs_3_pconv2_0_weight+6*6,decoder_de_convs_3_pconv2_0_bias+6,6,-14,y1);
+      pconv2d_fixed(y_tconv,6,65,decoder_de_convs_3_pconv2_0_weight,decoder_de_convs_3_pconv2_0_bias,6,12,-14,y0);
+      pconv2d_fixed(y_tconv+6*65,6,65,decoder_de_convs_3_pconv2_0_weight+6,decoder_de_convs_3_pconv2_0_bias+6,6,12,-14,y1);
       for(int c=0;c<6;c++){memcpy(y_pconv1+c*65,y0+c*65,65*sizeof(int32_t));memcpy(y_pconv1+(6+c)*65,y1+c*65,65*sizeof(int32_t));}
       bn_fixed(y_pconv1,12,65,decoder_de_convs_3_pconv2_1_weight,decoder_de_convs_3_pconv2_1_bias,
                decoder_de_convs_3_pconv2_1_running_mean,decoder_de_convs_3_pconv2_1_running_var,-11,-11); }

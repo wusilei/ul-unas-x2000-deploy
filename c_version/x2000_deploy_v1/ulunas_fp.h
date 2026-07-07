@@ -254,7 +254,7 @@ void tconv2d_fixed(const int32_t *x, int Cin, int Win,
 /* pconv2d: point-wise conv2d (1×1), weights (Cout, Cin, 1, 1) */
 void pconv2d_fixed(const int32_t *x, int Cin, int Win,
                    const int16_t *weight, const int32_t *bias,
-                   int Cout, int qr,
+                   int Cout, int stride, int qr,
                    int32_t *y);
 
 /* ptconv2d: point-wise transposed conv2d (1×1) */

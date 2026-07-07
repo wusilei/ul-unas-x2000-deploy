@@ -192,7 +192,7 @@ static double search_ctfa_6d_multi(ctfa_qr_t *qr,
                                     const int32_t **gm, const int32_t **gd,
                                     int n_frames, int use_mask, double dec_snr_floor,
                                     double *base_out) {
-    return search_ctfa_6d_multi_step(qr, ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, base_out, 2);
+    return search_ctfa_6d_multi_step(qr, ri, ii, gm, gd, n_frames, use_mask, dec_snr_floor, base_out, 3);  /* step=3: ~10x faster */
 }
 
 /* 4D grid search for DPRNN GRU QR (intra_qr1, intra_qr2, inter_qr1, inter_qr2) */

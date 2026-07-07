@@ -55,16 +55,16 @@ ctfa_qr_t g_qr_e4 = {-13, -8, -9,  -13, -8, -9};   /* MATLAB: ta 2^(-9) */
 #define E4_TA (g_qr_e4.ta_qr1), (g_qr_e4.ta_qr2), (g_qr_e4.ta_fc)
 #define E4_FA (g_qr_e4.fa_qr1), (g_qr_e4.fa_qr2), (g_qr_e4.fa_fc)
 #else
-#define D0_TA -13, -8, -9     /* MATLAB: ta 2^(-9) */
+#define D0_TA -13, -8, -9     /* MATLAB: ta 2^(-9) — calibrator confirmed optimal */
 #define D0_FA -13, -8, -9
-#define D1_TA -13, -8, -9
-#define D1_FA -13, -8, -9
-#define D2_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
-#define D2_FA -13, -8, -9
-#define D3_TA -13, -8, -9
-#define D3_FA -13, -8, -9
-#define D4_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
-#define D4_FA -13, -8, -9
+#define D1_TA -11, -14, -9    /* calibrated */
+#define D1_FA -20, -14, -6    /* calibrated */
+#define D2_TA -11, -14, -5    /* calibrated */
+#define D2_FA -8, -5, -2      /* calibrated */
+#define D3_TA -4, -16, -4     /* calibrated */
+#define D3_FA -6, -4, -12     /* calibrated */
+#define D4_TA -3, -15, -6     /* calibrated */
+#define D4_FA -12, -10, -8    /* calibrated */
 #define E0_TA -13, -8, -8     /* MATLAB: ta 2^(-8) */
 #define E0_FA -13, -8, -9
 #define E1_TA -13, -8, -10    /* MATLAB: ta 2^(-10) */

@@ -44,6 +44,18 @@ static double snr_db_2d(const int32_t *golden_wc, const int32_t *c_out_cw, int C
     return s;
 }
 
+/* Per-channel SNR for 2D layers: returns SNR dB for each channel */
+static void snr_db_per_channel(const int32_t *golden_wc, const int32_t *c_out_cw,
+                                int C, int W, double *snr_out) {
+    int32_t *gT = malloc(W * sizeof(int32_t));
+    for (int c = 0; c < C; c++) {
+        for (int w = 0; w < W; w++)
+            gT[w] = golden_wc[c + C * w];  /* col-major: golden[c,w] = golden[c + C*w] */
+        snr_out[c] = snr_db(gT, c_out_cw + c * W, W);
+    }
+    free(gT);
+}
+
 int main(int argc, char **argv) {
     const char *dir = argc>1?argv[1]:"dump_matlab/";
     char p[512];
@@ -85,6 +97,76 @@ int main(int argc, char **argv) {
             int32_t *g=load_int32(p,eC[s]*eW[s]);
             if(g){double sn=snr_db_2d(g,eo[s],eC[s],eW[s]);printf("  %-7s: SNR=%7.2f dB [%s]\n",en[s],sn,ok(sn));tested++;if(sn>80)passed++;free(g);}
             else printf("  %-7s: SKIP\n",en[s]);
+        }
+
+        /* ── Per-channel SNR: e2 (24ch × 33W) ── */
+        {
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e2.bin",dir,f);
+            int32_t *g2=load_int32(p,24*33);
+            if(g2){
+                double ch_snr[24];
+                snr_db_per_channel(g2, e2, 24, 33, ch_snr);
+                printf("\n  e2 per-channel SNR:\n");
+                for(int r=0;r<6;r++){
+                    printf("    ch %02d-%02d:", r*4, r*4+3);
+                    for(int c=r*4;c<r*4+4 && c<24;c++)
+                        printf(" %+6.1f", ch_snr[c]);
+                    printf("\n");
+                }
+                free(g2);
+            }
+        }
+
+        /* ── Per-channel SNR: e3 (32ch × 33W) ── */
+        {
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3.bin",dir,f);
+            int32_t *g3=load_int32(p,32*33);
+            if(g3){
+                double ch_snr[32];
+                snr_db_per_channel(g3, e3, 32, 33, ch_snr);
+                printf("\n  e3 per-channel SNR:\n");
+                for(int r=0;r<8;r++){
+                    printf("    ch %02d-%02d:", r*4, r*4+3);
+                    for(int c=r*4;c<r*4+4 && c<32;c++)
+                        printf(" %+6.1f", ch_snr[c]);
+                    printf("\n");
+                }
+                free(g3);
+            }
+        }
+
+        /* ── Per-channel SNR breakdown: group 0 vs group 1 ── */
+        printf("\n  Group summary:\n");
+        {
+            double ch_snr[32];  /* max channels */
+            /* e2: 24ch, group0=ch0-11, group1=ch12-23 */
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e2.bin",dir,f);
+            int32_t *g2=load_int32(p,24*33);
+            if(g2){
+                snr_db_per_channel(g2, e2, 24, 33, ch_snr);
+                double g0=0,g1=0; int n0=0,n1=0;
+                for(int c=0;c<12;c++){g0+=ch_snr[c];n0++;}
+                for(int c=12;c<24;c++){g1+=ch_snr[c];n1++;}
+                double min_snr=ch_snr[0],max_snr=ch_snr[0];
+                for(int c=1;c<24;c++){if(ch_snr[c]<min_snr)min_snr=ch_snr[c];if(ch_snr[c]>max_snr)max_snr=ch_snr[c];}
+                printf("  e2: group0(0-11)=%+.1f  group1(12-23)=%+.1f  range=[%+.1f, %+.1f]  spread=%.1f dB\n",
+                    g0/n0, g1/n1, min_snr, max_snr, max_snr-min_snr);
+                free(g2);
+            }
+            /* e3: 32ch, group0=ch0-15, group1=ch16-31 */
+            snprintf(p,sizeof(p),"%s/frame%d_enc_e3.bin",dir,f);
+            int32_t *g3=load_int32(p,32*33);
+            if(g3){
+                snr_db_per_channel(g3, e3, 32, 33, ch_snr);
+                double g0=0,g1=0; int n0=0,n1=0;
+                for(int c=0;c<16;c++){g0+=ch_snr[c];n0++;}
+                for(int c=16;c<32;c++){g1+=ch_snr[c];n1++;}
+                double min_snr=ch_snr[0],max_snr=ch_snr[0];
+                for(int c=1;c<32;c++){if(ch_snr[c]<min_snr)min_snr=ch_snr[c];if(ch_snr[c]>max_snr)max_snr=ch_snr[c];}
+                printf("  e3: group0(0-15)=%+.1f  group1(16-31)=%+.1f  range=[%+.1f, %+.1f]  spread=%.1f dB\n",
+                    g0/n0, g1/n1, min_snr, max_snr, max_snr-min_snr);
+                free(g3);
+            }
         }
 
         /* GDPRNN */

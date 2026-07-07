@@ -15,7 +15,6 @@
 #include "qr_config.h"
 #include "layer_dims.h"
 #include "ulunas_matlab_weights.h"
-#include "ulunas_matlab_weights.h"
 
 /* ================================================================
  * Helpers

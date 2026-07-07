@@ -198,12 +198,93 @@ for t = 1:max_frames
     write_bin([out_dir 'frame' num2str(t-1) '_enc_e4.bin'], int32(y_e4));
 
     % ====================================================================
-    % GDPRNN
+    % GDPRNN Block 0 (rnn1) — expanded for sub-step diagnostics
     % ====================================================================
-    [y_rnn1, inter_cache_0] = GDPRNN_module(y_e4, inter_cache_0, 0);
-    [y_rnn2, inter_cache_1] = GDPRNN_module(y_rnn1, inter_cache_1, 1);
+    % Load intra weights
+    ir0_ih_w  = importdata('dpgrnn_0_intra_rnn_rnn1_weight_ih_l0.mat');
+    ir0_ih_b  = importdata('dpgrnn_0_intra_rnn_rnn1_bias_ih_l0.mat');
+    ir0_hh_w  = importdata('dpgrnn_0_intra_rnn_rnn1_weight_hh_l0.mat');
+    ir0_hh_b  = importdata('dpgrnn_0_intra_rnn_rnn1_bias_hh_l0.mat');
+    ir0_re_ih_w = importdata('dpgrnn_0_intra_rnn_rnn1_weight_ih_l0_reverse.mat');
+    ir0_re_ih_b = importdata('dpgrnn_0_intra_rnn_rnn1_bias_ih_l0_reverse.mat');
+    ir0_re_hh_w = importdata('dpgrnn_0_intra_rnn_rnn1_weight_hh_l0_reverse.mat');
+    ir0_re_hh_b = importdata('dpgrnn_0_intra_rnn_rnn1_bias_hh_l0_reverse.mat');
+    ir1_ih_w  = importdata('dpgrnn_0_intra_rnn_rnn2_weight_ih_l0.mat');
+    ir1_ih_b  = importdata('dpgrnn_0_intra_rnn_rnn2_bias_ih_l0.mat');
+    ir1_hh_w  = importdata('dpgrnn_0_intra_rnn_rnn2_weight_hh_l0.mat');
+    ir1_hh_b  = importdata('dpgrnn_0_intra_rnn_rnn2_bias_hh_l0.mat');
+    ir1_re_ih_w = importdata('dpgrnn_0_intra_rnn_rnn2_weight_ih_l0_reverse.mat');
+    ir1_re_ih_b = importdata('dpgrnn_0_intra_rnn_rnn2_bias_ih_l0_reverse.mat');
+    ir1_re_hh_w = importdata('dpgrnn_0_intra_rnn_rnn2_weight_hh_l0_reverse.mat');
+    ir1_re_hh_b = importdata('dpgrnn_0_intra_rnn_rnn2_bias_hh_l0_reverse.mat');
+    intra_fc_w = importdata('dpgrnn_0_intra_fc_weight.mat');
+    intra_fc_b = importdata('dpgrnn_0_intra_fc_bias.mat');
+    intra_ln_w = importdata('dpgrnn_0_intra_ln_weight.mat');
+    intra_ln_b = importdata('dpgrnn_0_intra_ln_bias.mat');
 
+    % Transpose: (16,33)→(33,16)
+    x_dprnn = y_e4.';
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_in.bin'], int32(x_dprnn));
+
+    % Intra: split → BiGRU ×2 → concat → FC → LN → residual
+    x0 = x_dprnn(:, 1:8); x1 = x_dprnn(:, 9:16);
+    nH = 4;
+    x0_gru = BiGRU_module(x0, nH, ir0_ih_w, ir0_ih_b, ir0_hh_w, ir0_hh_b, ir0_re_ih_w, ir0_re_ih_b, ir0_re_hh_w, ir0_re_hh_b, -13, -8);
+    x1_gru = BiGRU_module(x1, nH, ir1_ih_w, ir1_ih_b, ir1_hh_w, ir1_hh_b, ir1_re_ih_w, ir1_re_ih_b, ir1_re_hh_w, ir1_re_hh_b, -13, -8);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_gru0.bin'], int16(x0_gru));
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_gru1.bin'], int16(x1_gru));
+
+    x_cat = cat(2, x0_gru, x1_gru);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_cat.bin'], int16(x_cat));
+
+    x_fc = round(x_cat * intra_fc_w * 2^(-9)) + intra_fc_b;
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_fc.bin'], int32(x_fc));
+
+    x_ln = ln_func(x_fc, intra_ln_w, intra_ln_b, -14);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_ln.bin'], int32(x_ln));
+
+    y_intra = x_dprnn + x_ln;
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_intra_out.bin'], int32(y_intra));
+
+    % Inter: split → GRU ×2 (per-frame) → concat → FC → LN → residual
+    er0_ih_w = importdata('dpgrnn_0_inter_rnn_rnn1_weight_ih_l0.mat');
+    er0_ih_b = importdata('dpgrnn_0_inter_rnn_rnn1_bias_ih_l0.mat');
+    er0_hh_w = importdata('dpgrnn_0_inter_rnn_rnn1_weight_hh_l0.mat');
+    er0_hh_b = importdata('dpgrnn_0_inter_rnn_rnn1_bias_hh_l0.mat');
+    er1_ih_w = importdata('dpgrnn_0_inter_rnn_rnn2_weight_ih_l0.mat');
+    er1_ih_b = importdata('dpgrnn_0_inter_rnn_rnn2_bias_ih_l0.mat');
+    er1_hh_w = importdata('dpgrnn_0_inter_rnn_rnn2_weight_hh_l0.mat');
+    er1_hh_b = importdata('dpgrnn_0_inter_rnn_rnn2_bias_hh_l0.mat');
+    inter_fc_w = importdata('dpgrnn_0_inter_fc_weight.mat');
+    inter_fc_b = importdata('dpgrnn_0_inter_fc_bias.mat');
+    inter_ln_w = importdata('dpgrnn_0_inter_ln_weight.mat');
+    inter_ln_b = importdata('dpgrnn_0_inter_ln_bias.mat');
+
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_in.bin'], int32(y_intra));
+
+    i0 = y_intra(:, 1:8); i1 = y_intra(:, 9:16);
+    i0_gru = GRU_module(i0, 8, inter_cache_0(:,1:8), er0_ih_w, er0_ih_b, er0_hh_w, er0_hh_b, -13, -8);
+    i1_gru = GRU_module(i1, 8, inter_cache_0(:,9:16), er1_ih_w, er1_ih_b, er1_hh_w, er1_hh_b, -13, -8);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_gru0.bin'], int16(i0_gru));
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_gru1.bin'], int16(i1_gru));
+
+    i_cat = cat(2, i0_gru, i1_gru);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_cat.bin'], int16(i_cat));
+
+    i_fc = round(i_cat * inter_fc_w * 2^(-9)) + inter_fc_b;
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_fc.bin'], int32(i_fc));
+
+    i_ln = ln_func(i_fc, inter_ln_w, inter_ln_b, -13);
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_ln.bin'], int32(i_ln));
+
+    y_rnn1 = (y_intra + i_ln).';
+    write_bin([out_dir 'frame' num2str(t-1) '_rnn1_inter_out.bin'], int32(y_intra + i_ln));
     write_bin([out_dir 'frame' num2str(t-1) '_rnn1.bin'], int32(y_rnn1));
+
+    % ====================================================================
+    % GDPRNN Block 1 (rnn2) — use module call (rnn1 is input)
+    % ====================================================================
+    [y_rnn2, inter_cache_1] = GDPRNN_module(y_rnn1, inter_cache_1, 1);
     write_bin([out_dir 'frame' num2str(t-1) '_rnn2.bin'], int32(y_rnn2));
 
     % ====================================================================

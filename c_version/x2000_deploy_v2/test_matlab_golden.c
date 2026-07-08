@@ -42,6 +42,17 @@ static uint16_t *load_uint16(const char *path, int n) {
     return buf;
 }
 
+static int16_t *load_int16(const char *path, int n) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    int16_t *buf = malloc(n * sizeof(int16_t));
+    if (!buf) { fclose(f); return NULL; }
+    size_t r = fread(buf, sizeof(int16_t), n, f);
+    fclose(f);
+    if (r != (size_t)n) { free(buf); return NULL; }
+    return buf;
+}
+
 static float *load_float(const char *path, int n) {
     FILE *f = fopen(path, "rb");
     if (!f) return NULL;
@@ -70,6 +81,21 @@ static double snr_db_i32(const int32_t *golden, const int32_t *test, int n) {
 
 /* SNR for uint16_t arrays */
 static double snr_db_u16(const uint16_t *golden, const uint16_t *test, int n) {
+    double s = 0.0, e = 0.0;
+    for (int i = 0; i < n; i++) {
+        double gv = (double)golden[i];
+        double tv = (double)test[i];
+        double d = gv - tv;
+        s += gv * gv;
+        e += d * d;
+    }
+    if (e < 1e-30) return 999.0;
+    if (s < 1e-30) return 999.0;
+    return 10.0 * log10(s / e);
+}
+
+/* SNR for int16_t arrays */
+static double snr_db_i16(const int16_t *golden, const int16_t *test, int n) {
     double s = 0.0, e = 0.0;
     for (int i = 0; i < n; i++) {
         double gv = (double)golden[i];
@@ -125,6 +151,10 @@ int main(int argc, char **argv) {
 
     printf("=== UL-UNAS C vs MATLAB Golden Layer SNR ===\n\n");
 
+    /* State persists ACROSS frames — do NOT re-init per frame */
+    ulunas_state_t st;
+    ulunas_state_init(&st);
+
     /* Process frames 0-4 */
     for (int frame = 0; frame < 5; frame++) {
         /* Load STFT input from golden dump */
@@ -140,10 +170,6 @@ int main(int argc, char **argv) {
         }
 
         printf("--- Frame %d ---\n", frame);
-
-        /* Initialize state */
-        ulunas_state_t st;
-        ulunas_state_init(&st);
 
         /* Step 1: log_gen */
         int32_t x_log[1 * 257];
@@ -233,6 +259,70 @@ int main(int argc, char **argv) {
                 free(g_ta);
             }
 
+            /* --- E0 TA Sub-Step Diagnostics (frame 0 only) --- */
+            if (frame == 0) {
+                int TA_C = 12, TA_W = 65, TA_nH = E0_CTFA_TA_GRU_NHID;
+
+                /* TA Step 1: Square + mean over frequency → [C] Q20 */
+                int32_t ta_agg[12];
+                for (int c = 0; c < TA_C; c++) {
+                    int64_t sum_sq = 0;
+                    for (int w = 0; w < TA_W; w++) {
+                        int32_t val = y_ap[c * TA_W + w];
+                        sum_sq += (int64_t)val * val;
+                    }
+                    int64_t denom = (int64_t)TA_W * 1048576LL;
+                    int64_t half = denom / 2;
+                    if (sum_sq >= 0) ta_agg[c] = (int32_t)((sum_sq + half) / denom);
+                    else             ta_agg[c] = (int32_t)((sum_sq - half) / denom);
+                    if (ta_agg[c] < 0) ta_agg[c] = 0;
+                }
+
+                /* TA Step 2: GRU (fresh cache = zeros for frame 0) */
+                int16_t ta_gru_out[24];
+                int16_t h_cache_ta_diag[24] = {0};
+                gru_module(ta_agg, TA_nH, TA_C, h_cache_ta_diag,
+                           encoder_en_convs_0_ops_4_ta_gru_weight_ih_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_bias_ih_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_weight_hh_l0,
+                           encoder_en_convs_0_ops_4_ta_gru_bias_hh_l0,
+                           E0_CTFA_TA_GRU_QR1, E0_CTFA_TA_GRU_QR2, ta_gru_out);
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_ta_gru.bin", dir);
+                int16_t *g_ta_gru = load_int16(path, 24);
+                if (g_ta_gru) {
+                    double snr = snr_db_i16(g_ta_gru, ta_gru_out, 24);
+                    printf("  E0.ta.gru : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", ta_gru_out[i]); printf("\n");
+                    printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_ta_gru[i]); printf("\n");
+                    free(g_ta_gru);
+                }
+
+                /* TA Step 3: FC + sigmoid */
+                int ta_shift_fc = -E0_CTFA_TA_FC_QR;
+                int64_t ta_r_fc = ((int64_t)1 << (ta_shift_fc - 1));
+                uint16_t ta_sig_diag[12];
+                for (int c = 0; c < TA_C; c++) {
+                    int64_t acc = 0;
+                    for (int j = 0; j < TA_nH; j++) {
+                        int64_t prod = (int64_t)ta_gru_out[j] *
+                            encoder_en_convs_0_ops_4_ta_fc_weight[j + TA_nH * c];
+                        if (prod >= 0) acc += (prod + ta_r_fc) >> ta_shift_fc;
+                        else           acc += (prod - ta_r_fc) >> ta_shift_fc;
+                    }
+                    int32_t fc_out = sat_i32(acc + encoder_en_convs_0_ops_4_ta_fc_bias[c]);
+                    ta_sig_diag[c] = sigmoid_q20_to_q15(fc_out);
+                }
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_ta_out.bin", dir);
+                uint16_t *g_ta_out = load_uint16(path, 12);
+                if (g_ta_out) {
+                    double snr = snr_db_u16(g_ta_out, ta_sig_diag, 12);
+                    printf("  E0.ta.sig : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    free(g_ta_out);
+                }
+            }
+
             /* E0.5: cTFA FA */
             uint16_t y_fa[65];
             ctfa_fa_module(y_ap, 12, 65, E0_CTFA_FA_GRU_NHID,
@@ -255,6 +345,161 @@ int main(int argc, char **argv) {
                 double snr = snr_db_u16(g_fa, y_fa, 65);
                 printf("  E0.fa    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_fa);
+            }
+
+            /* --- E0 FA Sub-Step Diagnostics (frame 0 only) --- */
+            if (frame == 0) {
+                int FA_C = 12, FA_W = 65, FA_nH = E0_CTFA_FA_GRU_NHID;
+                int FA_G = E0_CTFA_FA_GROUP, FA_S = E0_CTFA_FA_SEG, FA_P = E0_CTFA_FA_PAD;
+
+                /* FA Step 1: Square + mean over channels → [W] Q20 */
+                int32_t fa_agg[65];
+                for (int w = 0; w < FA_W; w++) {
+                    int64_t sum_sq = 0;
+                    for (int c = 0; c < FA_C; c++) {
+                        int32_t val = y_ap[c * FA_W + w];
+                        sum_sq += (int64_t)val * val;
+                    }
+                    int64_t denom = (int64_t)FA_C * 1048576LL;
+                    int64_t half = denom / 2;
+                    if (sum_sq >= 0) fa_agg[w] = (int32_t)((sum_sq + half) / denom);
+                    else             fa_agg[w] = (int32_t)((sum_sq - half) / denom);
+                    if (fa_agg[w] < 0) fa_agg[w] = 0;
+                }
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_fa_agg.bin", dir);
+                int32_t *g_fa_agg = load_int32(path, FA_W);
+                if (g_fa_agg) {
+                    double snr = snr_db_i32(g_fa_agg, fa_agg, FA_W);
+                    printf("  E0.fa.agg : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    free(g_fa_agg);
+                }
+
+                /* FA Step 2: Pad + Reshape to [seg][group] */
+                int32_t fa_pad[68];
+                memcpy(fa_pad, fa_agg, FA_W * sizeof(int32_t));
+                memset(fa_pad + FA_W, 0, FA_P * sizeof(int32_t));
+                int32_t fa_reshaped[68];
+                for (int s = 0; s < FA_S; s++)
+                    for (int g = 0; g < FA_G; g++)
+                        fa_reshaped[s * FA_G + g] = fa_pad[g + FA_G * s];
+
+                /* FA Step 3: BiGRU forward (per timestep, zero init) */
+                int16_t fa_gru_fwd[17 * 4];
+                int16_t h_fwd_diag[4] = {0};
+                for (int t = 0; t < FA_S; t++) {
+                    gru_module(&fa_reshaped[t * FA_G], FA_nH, FA_G, h_fwd_diag,
+                               encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,
+                               encoder_en_convs_0_ops_4_fa_gru_bias_ih_l0,
+                               encoder_en_convs_0_ops_4_fa_gru_weight_hh_l0,
+                               encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0,
+                               E0_CTFA_FA_GRU_QR1, E0_CTFA_FA_GRU_QR2,
+                               &fa_gru_fwd[t * FA_nH]);
+                }
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_fa_gru0.bin", dir);
+                int16_t *g_fa_gru0 = load_int16(path, FA_S * FA_nH);
+                if (g_fa_gru0) {
+                    /* Golden is MATLAB column-major (hidden-first): g[t + T*h]
+                     * C is row-major (time-first): c[t*nH + h]
+                     * Reorder golden to match C */
+                    int16_t g_reordered[68];
+                    for (int t = 0; t < FA_S; t++)
+                        for (int h = 0; h < FA_nH; h++)
+                            g_reordered[t * FA_nH + h] = g_fa_gru0[t + FA_S * h];
+                    double snr = snr_db_i16(g_reordered, fa_gru_fwd, FA_S * FA_nH);
+                    printf("  E0.fa.gru0 : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", fa_gru_fwd[i]); printf("\n");
+                    printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_reordered[i]); printf("\n");
+                    free(g_fa_gru0);
+                }
+
+                /* FA Step 4: BiGRU reverse (process t=16..0, zero init) */
+                int16_t fa_gru_rev_raw[17 * 4]; /* rev processing order */
+                int16_t h_rev_diag[4] = {0};
+                for (int t = 0; t < FA_S; t++) {
+                    int t_rev = FA_S - 1 - t;
+                    gru_module(&fa_reshaped[t_rev * FA_G], FA_nH, FA_G, h_rev_diag,
+                               encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0_reverse,
+                               encoder_en_convs_0_ops_4_fa_gru_bias_ih_l0_reverse,
+                               encoder_en_convs_0_ops_4_fa_gru_weight_hh_l0_reverse,
+                               encoder_en_convs_0_ops_4_fa_gru_bias_hh_l0_reverse,
+                               E0_CTFA_FA_GRU_QR1, E0_CTFA_FA_GRU_QR2,
+                               &fa_gru_rev_raw[t * FA_nH]);
+                }
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_fa_gru1.bin", dir);
+                int16_t *g_fa_gru1 = load_int16(path, FA_S * FA_nH);
+                if (g_fa_gru1) {
+                    /* Golden is MATLAB column-major: g[t_fwd + T*h]
+                     * C raw rev order: fa_gru_rev_raw[step*nH+h] where step=0 → t_fwd=T-1
+                     * Build rev in forward time order, then compare */
+                    int16_t g_reordered[68];
+                    int16_t rev_fwd[68];
+                    for (int t = 0; t < FA_S; t++)
+                        for (int h = 0; h < FA_nH; h++) {
+                            g_reordered[t * FA_nH + h] = g_fa_gru1[t + FA_S * h];
+                            rev_fwd[t * FA_nH + h] = fa_gru_rev_raw[(FA_S - 1 - t) * FA_nH + h];
+                        }
+                    double snr = snr_db_i16(g_reordered, rev_fwd, FA_S * FA_nH);
+                    printf("  E0.fa.gru1 : SNR=%7.2f dB  [%s] (fwd time order)\n", snr, status(snr));
+                    free(g_fa_gru1);
+                }
+
+                /* Build concatenated BiGRU output: cat(fwd, flipped_rev) */
+                int16_t fa_gru_cat[17 * 8];
+                for (int t = 0; t < FA_S; t++) {
+                    memcpy(&fa_gru_cat[t * (2 * FA_nH)], &fa_gru_fwd[t * FA_nH],
+                           FA_nH * sizeof(int16_t));
+                    memcpy(&fa_gru_cat[t * (2 * FA_nH) + FA_nH],
+                           &fa_gru_rev_raw[(FA_S - 1 - t) * FA_nH],
+                           FA_nH * sizeof(int16_t));
+                }
+
+                /* FA Step 5: FC [seg][2*nH] → [seg][group] */
+                int fa_shift_fc = -E0_CTFA_FA_FC_QR;
+                int64_t fa_r_fc = ((int64_t)1 << (fa_shift_fc - 1));
+                int FA_in_fc = 2 * FA_nH;
+                int32_t fa_fc_2d[17 * 4];
+                for (int s = 0; s < FA_S; s++) {
+                    for (int g = 0; g < FA_G; g++) {
+                        int64_t acc = 0;
+                        for (int i = 0; i < FA_in_fc; i++) {
+                            int64_t prod = (int64_t)fa_gru_cat[s * FA_in_fc + i] *
+                                encoder_en_convs_0_ops_4_fa_fc_weight[i + FA_in_fc * g];
+                            if (prod >= 0) acc += (prod + fa_r_fc) >> fa_shift_fc;
+                            else           acc += (prod - fa_r_fc) >> fa_shift_fc;
+                        }
+                        fa_fc_2d[s * FA_G + g] = sat_i32(acc +
+                            encoder_en_convs_0_ops_4_fa_fc_bias[g]);
+                    }
+                }
+                /* Reshape: x_flat[g + G*s] = x_fc_2d[s*G + g] */
+                int32_t fa_fc_flat[68];
+                for (int g = 0; g < FA_G; g++)
+                    for (int s = 0; s < FA_S; s++)
+                        fa_fc_flat[g + FA_G * s] = fa_fc_2d[s * FA_G + g];
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_fa_fc.bin", dir);
+                int32_t *g_fa_fc = load_int32(path, 68);
+                if (g_fa_fc) {
+                    double snr = snr_db_i32(g_fa_fc, fa_fc_flat, 68);
+                    printf("  E0.fa.fc  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    free(g_fa_fc);
+                }
+
+                /* FA Step 6: Sigmoid [0:W-1] */
+                uint16_t fa_sig_diag[65];
+                for (int w = 0; w < FA_W; w++)
+                    fa_sig_diag[w] = sigmoid_q20_to_q15(fa_fc_flat[w]);
+
+                snprintf(path, sizeof(path), "%s/frame0_e0_fa_out.bin", dir);
+                uint16_t *g_fa_out = load_uint16(path, FA_W);
+                if (g_fa_out) {
+                    double snr = snr_db_u16(g_fa_out, fa_sig_diag, FA_W);
+                    printf("  E0.fa.sig : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                    free(g_fa_out);
+                }
             }
 
             /* E0.6: cTFA fusion */
@@ -307,6 +552,464 @@ int main(int argc, char **argv) {
                 free(g);
             } else {
                 printf("  %-7s   : SKIP (no golden)\n", enames[s]);
+            }
+        }
+
+        /* --- Layer Isolation Test (frame 0 only, fresh state = zero caches) --- */
+        if (frame == 0) {
+            printf("\n  --- Layer Isolation (golden input -> C layer -> golden output) ---\n");
+            const char *inames[] = {"enc_e0", "enc_e1", "enc_e2", "enc_e3", "enc_e4"};
+            int iC[] = {12, 24, 24, 32, 16};
+            int iW[] = {65, 33, 33, 33, 33};
+            /* Test each encoder layer with golden input */
+            for (int layer = 0; layer < 5; layer++) {
+                /* Determine golden input file */
+                const char *input_name = (layer == 0) ? "bm" : inames[layer - 1];
+                int input_sz = (layer == 0) ? 129 : iC[layer - 1] * iW[layer - 1];
+                snprintf(path, sizeof(path), "%s/frame0_%s.bin", dir, input_name);
+                int32_t *golden_in = load_int32(path, input_sz);
+                if (!golden_in) { printf("  E%d iso    : SKIP (no golden input)\n", layer); continue; }
+
+                /* Load golden output for comparison */
+                snprintf(path, sizeof(path), "%s/frame0_%s.bin", dir, inames[layer]);
+                int32_t *golden_out = load_int32(path, iC[layer] * iW[layer]);
+                if (!golden_out) { printf("  E%d iso    : SKIP (no golden output)\n", layer); free(golden_in); continue; }
+
+                /* Convert golden input from MATLAB column-major to C row-major.
+                 * Golden is [C, W] col-major: golden[c + C*w]
+                 * C expects [C, W] row-major: x[c*W + w] */
+                int32_t *input_rm = malloc(input_sz * sizeof(int32_t));
+                if (layer == 0) {
+                    memcpy(input_rm, golden_in, input_sz * sizeof(int32_t)); /* 1D, no change */
+                } else {
+                    for (int c = 0; c < iC[layer - 1]; c++)
+                        for (int w = 0; w < iW[layer - 1]; w++)
+                            input_rm[c * iW[layer - 1] + w] = golden_in[c + iC[layer - 1] * w];
+                }
+
+                /* Fresh state (zero caches = frame 0 cold start) */
+                ulunas_state_t iso_st;
+                ulunas_state_init(&iso_st);
+
+                int32_t *c_out = malloc(iC[layer] * iW[layer] * sizeof(int32_t));
+                if (!c_out) { free(golden_in); free(golden_out); free(input_rm); continue; }
+
+                switch (layer) {
+                case 0: encoder_layer0_xconv(input_rm, &iso_st, c_out); break;
+                case 1: encoder_layer1_xmb0(input_rm, &iso_st, c_out); break;
+                case 2: encoder_layer2_xdws0(input_rm, &iso_st, c_out); break;
+                case 3: encoder_layer3_xmb1(input_rm, &iso_st, c_out); break;
+                case 4: encoder_layer4_xdws1(input_rm, &iso_st, c_out); break;
+                }
+
+                double snr = snr_db_2d_i32(golden_out, c_out, iC[layer], iW[layer]);
+                printf("  E%d iso    : SNR=%7.2f dB  [%s] (golden input)\n",
+                       layer, snr, status(snr));
+
+                /* E1 sub-step diagnostics (full pipeline, frame 0 only) */
+                if (layer == 1) {
+                    int E1_C = 24;
+                    /* ================================================
+                     * E1 Pipeline (inline, matching encoder_layer1_xmb0):
+                     *   golden_in[12×65] → PConv0(g=2) → BN → AP
+                     *   → Shuffle → TConv(gconv,2×3,s=2) → BN → AP
+                     *   → PConv1(g=2) → BN
+                     *   → cTFA(TA+FA) → Fusion → Shuffle → [24×33]
+                     * ================================================ */
+
+                    /* ---- Stage 1: PConv0 (2 groups) ---- */
+                    uint16_t e1_ta_sig[24]; /* declared here for fusion scope access */
+                    uint16_t e1_fa_sig[33];
+                    int32_t y_pconv0_raw[24 * 65];
+                    pconv2d_func(input_rm, 6, 12, 1, 65,
+                                 encoder_en_convs_1_pconv1_0_weight,
+                                 encoder_en_convs_1_pconv1_0_bias,
+                                 E1_PCONV0_CONV_QR, 24, y_pconv0_raw);
+                    pconv2d_func(input_rm + 6 * 65, 6, 12, 1, 65,
+                                 encoder_en_convs_1_pconv1_0_weight + 12,
+                                 encoder_en_convs_1_pconv1_0_bias + 12,
+                                 E1_PCONV0_CONV_QR, 24, y_pconv0_raw + 12 * 65);
+
+                    /* ---- Stage 2: BN ---- */
+                    /* DEBUG: dump raw PConv0 ch0 first 5 */
+                    printf("  E1.pconv0_raw ch0: %d %d %d %d %d\n",
+                           y_pconv0_raw[0], y_pconv0_raw[1], y_pconv0_raw[2],
+                           y_pconv0_raw[3], y_pconv0_raw[4]);
+                    int32_t y_bn0[24 * 65];
+                    bn_func(y_pconv0_raw, encoder_en_convs_1_pconv1_1_weight,
+                            encoder_en_convs_1_pconv1_1_bias,
+                            encoder_en_convs_1_pconv1_1_running_mean,
+                            encoder_en_convs_1_pconv1_1_running_var,
+                            E1_PCONV0_BN_QR1, E1_PCONV0_BN_QR2, 24, 24 * 65, y_bn0);
+                    printf("  E1.bn0 ch0: %d %d %d\n", y_bn0[0], y_bn0[1], y_bn0[2]);
+
+                    /* ---- Stage 3: AffinePReLU ---- */
+                    int32_t y_ap0[24 * 65];
+                    affineprelu_func(y_bn0, encoder_en_convs_1_pconv1_2_affine_weight,
+                                     encoder_en_convs_1_pconv1_2_affine_bias,
+                                     encoder_en_convs_1_pconv1_2_slope_weight,
+                                     E1_PCONV0_AFFINE_QR1, E1_PCONV0_AFFINE_QR2, 24, 65, y_ap0);
+
+                    /* Check PConv0+BN+AP golden */
+                    snprintf(path, sizeof(path), "%s/frame0_e1_pconv0.bin", dir);
+                    int32_t *g_e1_pc0 = load_int32(path, 24 * 65);
+                    if (g_e1_pc0) {
+                        double snr = snr_db_2d_i32(g_e1_pc0, y_ap0, 24, 65);
+                        printf("  E1.pconv0  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", y_ap0[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_e1_pc0[i]); printf("\n");
+                        free(g_e1_pc0);
+                    }
+
+                    /* ---- Stage 4: Shuffle (interleave) ---- */
+                    int32_t y_shuf0[24 * 65];
+                    shuffle_interleave(y_ap0, 24, 65, y_shuf0);
+
+                    snprintf(path, sizeof(path), "%s/frame0_e1_shuf.bin", dir);
+                    int32_t *g_e1_shuf = load_int32(path, 24 * 65);
+                    if (g_e1_shuf) {
+                        double snr = snr_db_2d_i32(g_e1_shuf, y_shuf0, 24, 65);
+                        printf("  E1.shuf    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        free(g_e1_shuf);
+                    }
+
+                    /* ---- Stage 5: TConv (gconv, 2×3, s=[1,2], with cache) ---- */
+                    int32_t y_tconv_raw[24 * 33];
+                    {
+                        ulunas_state_t e1s_st;
+                        ulunas_state_init(&e1s_st);
+                        gconv2d_func(y_shuf0, 24, 1, 33, 2, 3, 1, 2,
+                                     encoder_en_convs_1_dconv_1_weight,
+                                     encoder_en_convs_1_dconv_1_bias,
+                                     E1_TCONV_CONV_QR, e1s_st.conv_cache_e1, y_tconv_raw);
+                    }
+
+                    /* ---- Stage 6: TConv BN ---- */
+                    int32_t y_tconv_bn[24 * 33];
+                    bn_func(y_tconv_raw, encoder_en_convs_1_dconv_2_weight,
+                            encoder_en_convs_1_dconv_2_bias,
+                            encoder_en_convs_1_dconv_2_running_mean,
+                            encoder_en_convs_1_dconv_2_running_var,
+                            E1_TCONV_BN_QR1, E1_TCONV_BN_QR2, 24, 24 * 33, y_tconv_bn);
+
+                    /* ---- Stage 7: TConv AffinePReLU ---- */
+                    int32_t y_tconv_ap[24 * 33];
+                    affineprelu_func(y_tconv_bn, encoder_en_convs_1_dconv_3_affine_weight,
+                                     encoder_en_convs_1_dconv_3_affine_bias,
+                                     encoder_en_convs_1_dconv_3_slope_weight,
+                                     E1_TCONV_AFFINE_QR1, E1_TCONV_AFFINE_QR2, 24, 33, y_tconv_ap);
+
+                    /* Check TConv golden */
+                    snprintf(path, sizeof(path), "%s/frame0_enc_e1_tconv.bin", dir);
+                    int32_t *g_e1_tconv = load_int32(path, 24 * 33);
+                    if (g_e1_tconv) {
+                        double snr = snr_db_2d_i32(g_e1_tconv, y_tconv_ap, 24, 33);
+                        printf("  E1.tconv   : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", y_tconv_ap[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_e1_tconv[i]); printf("\n");
+                        free(g_e1_tconv);
+                    } else {
+                        /* Dump first values for manual inspection */
+                        printf("  E1.tconv   : (no golden)  [0..7]=");
+                        for(int i=0;i<8;i++) printf(" %d", y_tconv_ap[i]); printf("\n");
+                    }
+
+                    /* ---- Stage 8: PConv1 (2 groups) ---- */
+                    int32_t y_pconv1_raw[24 * 33];
+                    pconv2d_func(y_tconv_ap, 12, 12, 1, 33,
+                                 encoder_en_convs_1_pconv2_0_weight,
+                                 encoder_en_convs_1_pconv2_0_bias,
+                                 E1_PCONV1_CONV_QR, 24, y_pconv1_raw);
+                    pconv2d_func(y_tconv_ap + 12 * 33, 12, 12, 1, 33,
+                                 encoder_en_convs_1_pconv2_0_weight + 12,
+                                 encoder_en_convs_1_pconv2_0_bias + 12,
+                                 E1_PCONV1_CONV_QR, 24, y_pconv1_raw + 12 * 33);
+
+                    /* ---- Stage 9: PConv1 BN (in-place on y_pconv1_cTFA) ---- */
+                    int32_t y_ctfa_in[24 * 33];
+                    bn_func(y_pconv1_raw, encoder_en_convs_1_pconv2_1_weight,
+                            encoder_en_convs_1_pconv2_1_bias,
+                            encoder_en_convs_1_pconv2_1_running_mean,
+                            encoder_en_convs_1_pconv2_1_running_var,
+                            E1_PCONV1_BN_QR1, E1_PCONV1_BN_QR2, 24, 24 * 33, y_ctfa_in);
+
+                    /* Check cTFA input golden */
+                    snprintf(path, sizeof(path), "%s/frame0_enc_e1_ctfa_in.bin", dir);
+                    int32_t *g_e1_ctfa_in = load_int32(path, 24 * 33);
+                    if (g_e1_ctfa_in) {
+                        double snr = snr_db_2d_i32(g_e1_ctfa_in, y_ctfa_in, 24, 33);
+                        printf("  E1.ctfa_in : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", y_ctfa_in[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_e1_ctfa_in[i]); printf("\n");
+                        free(g_e1_ctfa_in);
+                    } else {
+                        printf("  E1.ctfa_in : (no golden)  [0..7]=");
+                        for(int i=0;i<8;i++) printf(" %d", y_ctfa_in[i]); printf("\n");
+                    }
+
+                    /* ================================================
+                     * TA sub-step diagnostics
+                     * ================================================ */
+                    {
+                        int TA_C = 24, TA_W = 33, TA_nH = E1_CTFA_TA_GRU_NHID; /* nH=48 */
+
+                        /* TA Step 1: square + mean over frequency → [C] Q20 */
+                        int32_t ta_agg[24];
+                        for (int c = 0; c < TA_C; c++) {
+                            int64_t sum_sq = 0;
+                            for (int w = 0; w < TA_W; w++) {
+                                int32_t val = y_ctfa_in[c * TA_W + w];
+                                sum_sq += (int64_t)val * val;
+                            }
+                            int64_t denom = (int64_t)TA_W * 1048576LL;
+                            int64_t half = denom / 2;
+                            if (sum_sq >= 0) ta_agg[c] = (int32_t)((sum_sq + half) / denom);
+                            else             ta_agg[c] = (int32_t)((sum_sq - half) / denom);
+                            if (ta_agg[c] < 0) ta_agg[c] = 0;
+                        }
+
+                        /* TA Step 2: GRU (fresh cache, single time step) */
+                        int16_t ta_gru_out[48]; /* nH=48 */
+                        int16_t h_cache_ta_diag[48] = {0};
+                        gru_module(ta_agg, TA_nH, TA_C, h_cache_ta_diag,
+                                   encoder_en_convs_1_pconv2_2_ta_gru_weight_ih_l0,
+                                   encoder_en_convs_1_pconv2_2_ta_gru_bias_ih_l0,
+                                   encoder_en_convs_1_pconv2_2_ta_gru_weight_hh_l0,
+                                   encoder_en_convs_1_pconv2_2_ta_gru_bias_hh_l0,
+                                   E1_CTFA_TA_GRU_QR1, E1_CTFA_TA_GRU_QR2, ta_gru_out);
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_ta_gru.bin", dir);
+                        int16_t *g_ta_gru = load_int16(path, TA_nH);
+                        if (g_ta_gru) {
+                            double snr = snr_db_i16(g_ta_gru, ta_gru_out, TA_nH);
+                            printf("  E1.ta.gru  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", ta_gru_out[i]); printf("\n");
+                            printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_ta_gru[i]); printf("\n");
+                            free(g_ta_gru);
+                        }
+
+                        /* TA Step 3: FC + sigmoid → [C] Q15 */
+                        int ta_shift_fc = -E1_CTFA_TA_FC_QR; /* shift=8 */
+                        int64_t ta_r_fc = ((int64_t)1 << (ta_shift_fc - 1));
+                        /* use e1_ta_sig declared at block scope */
+                        for (int c = 0; c < TA_C; c++) {
+                            int64_t acc = 0;
+                            for (int j = 0; j < TA_nH; j++) {
+                                int64_t prod = (int64_t)ta_gru_out[j] *
+                                    encoder_en_convs_1_pconv2_2_ta_fc_weight[j + TA_nH * c];
+                                if (prod >= 0) acc += (prod + ta_r_fc) >> ta_shift_fc;
+                                else           acc += (prod - ta_r_fc) >> ta_shift_fc;
+                            }
+                            int32_t fc_out = sat_i32(acc + encoder_en_convs_1_pconv2_2_ta_fc_bias[c]);
+                            e1_ta_sig[c] = sigmoid_q20_to_q15(fc_out);
+                        }
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_ta_out.bin", dir);
+                        uint16_t *g_ta_out = load_uint16(path, TA_C);
+                        if (g_ta_out) {
+                            double snr = snr_db_u16(g_ta_out, e1_ta_sig, TA_C);
+                            printf("  E1.ta.sig  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            free(g_ta_out);
+                        }
+
+                        /* Compare with full TA module output */
+                        snprintf(path, sizeof(path), "%s/frame0_enc_e1_ctfa_ta.bin", dir);
+                        uint16_t *g_e1_ta = load_uint16(path, TA_C);
+                        if (g_e1_ta) {
+                            double snr = snr_db_u16(g_e1_ta, e1_ta_sig, TA_C);
+                            printf("  E1.ta      : SNR=%7.2f dB  [%s] (full module)\n", snr, status(snr));
+                            free(g_e1_ta);
+                        }
+                    }
+
+                    /* ================================================
+                     * FA sub-step diagnostics
+                     * ================================================ */
+                    {
+                        int FA_C = 24, FA_W = 33, FA_nH = E1_CTFA_FA_GRU_NHID; /* nH=4 */
+                        int FA_G = E1_CTFA_FA_GROUP; /* 4 */
+                        int FA_S = E1_CTFA_FA_SEG;   /* 9 */
+                        int FA_P = E1_CTFA_FA_PAD;   /* 3 */
+
+                        /* FA Step 1: square + mean over channels → [W] Q20 */
+                        int32_t fa_agg[33];
+                        for (int w = 0; w < FA_W; w++) {
+                            int64_t sum_sq = 0;
+                            for (int c = 0; c < FA_C; c++) {
+                                int32_t val = y_ctfa_in[c * FA_W + w];
+                                sum_sq += (int64_t)val * val;
+                            }
+                            int64_t denom = (int64_t)FA_C * 1048576LL;
+                            int64_t half = denom / 2;
+                            if (sum_sq >= 0) fa_agg[w] = (int32_t)((sum_sq + half) / denom);
+                            else             fa_agg[w] = (int32_t)((sum_sq - half) / denom);
+                            if (fa_agg[w] < 0) fa_agg[w] = 0;
+                        }
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_fa_agg.bin", dir);
+                        int32_t *g_fa_agg = load_int32(path, FA_W);
+                        if (g_fa_agg) {
+                            double snr = snr_db_i32(g_fa_agg, fa_agg, FA_W);
+                            printf("  E1.fa.agg  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            free(g_fa_agg);
+                        }
+
+                        /* FA Step 2: Pad + Reshape to [seg][group] */
+                        int32_t fa_pad[36]; /* 33+3=36 */
+                        memcpy(fa_pad, fa_agg, FA_W * sizeof(int32_t));
+                        memset(fa_pad + FA_W, 0, FA_P * sizeof(int32_t));
+                        int32_t fa_reshaped[36]; /* [9][4] */
+                        for (int s = 0; s < FA_S; s++)
+                            for (int g = 0; g < FA_G; g++)
+                                fa_reshaped[s * FA_G + g] = fa_pad[g + FA_G * s];
+
+                        /* FA Step 3: BiGRU forward (per timestep, zero init) */
+                        int16_t fa_gru_fwd[36]; /* [9][4] */
+                        int16_t h_fwd[4] = {0};
+                        for (int t = 0; t < FA_S; t++) {
+                            gru_module(&fa_reshaped[t * FA_G], FA_nH, FA_G, h_fwd,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0,
+                                       E1_CTFA_FA_GRU_QR1, E1_CTFA_FA_GRU_QR2,
+                                       &fa_gru_fwd[t * FA_nH]);
+                        }
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_fa_gru0.bin", dir);
+                        int16_t *g_fa_gru0 = load_int16(path, FA_S * FA_nH);
+                        if (g_fa_gru0) {
+                            double snr = snr_db_i16(g_fa_gru0, fa_gru_fwd, FA_S * FA_nH);
+                            printf("  E1.fa.gru0 : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", fa_gru_fwd[i]); printf("\n");
+                            printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_fa_gru0[i]); printf("\n");
+                            free(g_fa_gru0);
+                        }
+
+                        /* FA Step 4: BiGRU reverse (process t=8..0, zero init) */
+                        int16_t fa_gru_rev[36]; /* [9][4] in reverse processing order */
+                        int16_t h_rev[4] = {0};
+                        for (int t = 0; t < FA_S; t++) {
+                            int t_rev = FA_S - 1 - t;
+                            gru_module(&fa_reshaped[t_rev * FA_G], FA_nH, FA_G, h_rev,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0_reverse,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_bias_ih_l0_reverse,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_weight_hh_l0_reverse,
+                                       encoder_en_convs_1_pconv2_2_fa_gru_bias_hh_l0_reverse,
+                                       E1_CTFA_FA_GRU_QR1, E1_CTFA_FA_GRU_QR2,
+                                       &fa_gru_rev[t * FA_nH]);
+                        }
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_fa_gru1.bin", dir);
+                        int16_t *g_fa_gru1 = load_int16(path, FA_S * FA_nH);
+                        if (g_fa_gru1) {
+                            double snr = snr_db_i16(g_fa_gru1, fa_gru_rev, FA_S * FA_nH);
+                            printf("  E1.fa.gru1 : SNR=%7.2f dB  [%s] (raw rev order)\n", snr, status(snr));
+                            free(g_fa_gru1);
+                        }
+
+                        /* FA Step 5: Concat forward + flipped reverse → [seg][2*nH] */
+                        int16_t fa_gru_cat[72]; /* [9][8] */
+                        for (int t = 0; t < FA_S; t++) {
+                            memcpy(&fa_gru_cat[t * (2 * FA_nH)], &fa_gru_fwd[t * FA_nH],
+                                   FA_nH * sizeof(int16_t));
+                            memcpy(&fa_gru_cat[t * (2 * FA_nH) + FA_nH],
+                                   &fa_gru_rev[(FA_S - 1 - t) * FA_nH],
+                                   FA_nH * sizeof(int16_t));
+                        }
+
+                        /* FA Step 6: FC [seg][2*nH] → [seg][group] */
+                        int fa_shift_fc = -E1_CTFA_FA_FC_QR; /* shift=9 */
+                        int64_t fa_r_fc = ((int64_t)1 << (fa_shift_fc - 1));
+                        int FA_in_fc = 2 * FA_nH; /* 8 */
+                        int32_t fa_fc_2d[36]; /* [9][4] */
+                        for (int s = 0; s < FA_S; s++) {
+                            for (int g = 0; g < FA_G; g++) {
+                                int64_t acc = 0;
+                                for (int i = 0; i < FA_in_fc; i++) {
+                                    int64_t prod = (int64_t)fa_gru_cat[s * FA_in_fc + i] *
+                                        encoder_en_convs_1_pconv2_2_fa_fc_weight[i + FA_in_fc * g];
+                                    if (prod >= 0) acc += (prod + fa_r_fc) >> fa_shift_fc;
+                                    else           acc += (prod - fa_r_fc) >> fa_shift_fc;
+                                }
+                                fa_fc_2d[s * FA_G + g] = sat_i32(acc +
+                                    encoder_en_convs_1_pconv2_2_fa_fc_bias[g]);
+                            }
+                        }
+                        /* Reshape: x_flat[g + G*s] = fc_2d[s*G + g] */
+                        int32_t fa_fc_flat[36];
+                        for (int g = 0; g < FA_G; g++)
+                            for (int s = 0; s < FA_S; s++)
+                                fa_fc_flat[g + FA_G * s] = fa_fc_2d[s * FA_G + g];
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_fa_fc.bin", dir);
+                        int32_t *g_fa_fc = load_int32(path, FA_S * FA_G);
+                        if (g_fa_fc) {
+                            double snr = snr_db_i32(g_fa_fc, fa_fc_flat, FA_S * FA_G);
+                            printf("  E1.fa.fc   : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            free(g_fa_fc);
+                        }
+
+                        /* FA Step 7: Sigmoid [0:W-1] (de-pad: keep first W elements) */
+                        /* use e1_fa_sig declared at block scope */
+                        for (int w = 0; w < FA_W; w++)
+                            e1_fa_sig[w] = sigmoid_q20_to_q15(fa_fc_flat[w]);
+
+                        snprintf(path, sizeof(path), "%s/frame0_e1_fa_out.bin", dir);
+                        uint16_t *g_fa_out = load_uint16(path, FA_W);
+                        if (g_fa_out) {
+                            double snr = snr_db_u16(g_fa_out, e1_fa_sig, FA_W);
+                            printf("  E1.fa.sig  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            free(g_fa_out);
+                        }
+
+                        /* Compare with full FA module output */
+                        snprintf(path, sizeof(path), "%s/frame0_enc_e1_ctfa_fa.bin", dir);
+                        uint16_t *g_e1_fa = load_uint16(path, FA_W);
+                        if (g_e1_fa) {
+                            double snr = snr_db_u16(g_e1_fa, e1_fa_sig, FA_W);
+                            printf("  E1.fa      : SNR=%7.2f dB  [%s] (full module)\n", snr, status(snr));
+                            free(g_e1_fa);
+                        }
+
+                        /* ================================================
+                         * cTFA Fusion + Final Shuffle
+                         * y_t = round(y_ctfa_in .* ta' * 2^(-15))
+                         * y   = shuffle(round(y_t .* fa * 2^(-15)))
+                         * ================================================ */
+                        int32_t y_fusion[24 * 33];
+                        int64_t r_f = 16384;
+                        for (int c = 0; c < 24; c++) {
+                            for (int w = 0; w < 33; w++) {
+                                int64_t p1 = (int64_t)y_ctfa_in[c * 33 + w] * e1_ta_sig[c];
+                                int32_t yt;
+                                if (p1 >= 0) yt = (int32_t)((p1 + r_f) >> 15);
+                                else         yt = (int32_t)((p1 - r_f) >> 15);
+                                int64_t p2 = (int64_t)yt * e1_fa_sig[w];
+                                if (p2 >= 0) y_fusion[c * 33 + w] = (int32_t)((p2 + r_f) >> 15);
+                                else         y_fusion[c * 33 + w] = (int32_t)((p2 - r_f) >> 15);
+                            }
+                        }
+
+                        /* Final shuffle (interleave) */
+                        int32_t y_e1_final[24 * 33];
+                        shuffle_interleave(y_fusion, 24, 33, y_e1_final);
+
+                        /* Check fusion+shuffle against enc_e1 golden = final E1 output */
+                        snprintf(path, sizeof(path), "%s/frame0_enc_e1.bin", dir);
+                        int32_t *g_e1_out = load_int32(path, 24 * 33);
+                        if (g_e1_out) {
+                            double snr = snr_db_2d_i32(g_e1_out, y_e1_final, 24, 33);
+                            printf("  E1.final   : SNR=%7.2f dB  [%s] (fusion+shuffle vs golden)\n",
+                                   snr, status(snr));
+                            printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", y_e1_final[i]); printf("\n");
+                            printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_e1_out[i]); printf("\n");
+                            free(g_e1_out);
+                        }
+                    }
+                }
+
+                free(golden_in); free(golden_out); free(c_out); free(input_rm);
             }
         }
 

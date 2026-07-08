@@ -123,12 +123,12 @@ void encoder_layer1_xmb0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(x, 6, 12, 1, 65,
                  encoder_en_convs_1_pconv1_0_weight,      /* first 12 output channels */
                  encoder_en_convs_1_pconv1_0_bias,
-                 E1_PCONV0_CONV_QR, y_pconv0);
-    /* Group 1: x[6:12, :] → pconv with weight[12:24, :] */
+                 E1_PCONV0_CONV_QR, 24, y_pconv0);
+    /* Group 1: x[6:12, :] → pconv with weight[12:24, :] (stride=24, offset=12 rows) */
     pconv2d_func(x + 6 * 65, 6, 12, 1, 65,
-                 encoder_en_convs_1_pconv1_0_weight + 12 * 6,  /* next 12 output channels */
+                 encoder_en_convs_1_pconv1_0_weight + 12,  /* start at row 12 */
                  encoder_en_convs_1_pconv1_0_bias + 12,
-                 E1_PCONV0_CONV_QR, y_pconv0 + 12 * 65);
+                 E1_PCONV0_CONV_QR, 24, y_pconv0 + 12 * 65);
 
     /* BN */
     int32_t y_bn[24 * 65];
@@ -170,11 +170,11 @@ void encoder_layer1_xmb0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(y_tconv_ap, 12, 12, 1, 33,
                  encoder_en_convs_1_pconv2_0_weight,
                  encoder_en_convs_1_pconv2_0_bias,
-                 E1_PCONV1_CONV_QR, y_pconv1);
+                 E1_PCONV1_CONV_QR, 24, y_pconv1);
     pconv2d_func(y_tconv_ap + 12 * 33, 12, 12, 1, 33,
-                 encoder_en_convs_1_pconv2_0_weight + 12 * 12,
+                 encoder_en_convs_1_pconv2_0_weight + 12,
                  encoder_en_convs_1_pconv2_0_bias + 12,
-                 E1_PCONV1_CONV_QR, y_pconv1 + 12 * 33);
+                 E1_PCONV1_CONV_QR, 24, y_pconv1 + 12 * 33);
     bn_func(y_pconv1, encoder_en_convs_1_pconv2_1_weight, encoder_en_convs_1_pconv2_1_bias,
             encoder_en_convs_1_pconv2_1_running_mean, encoder_en_convs_1_pconv2_1_running_var,
             E1_PCONV1_BN_QR1, E1_PCONV1_BN_QR2, 24, 24 * 33, y_pconv1);  /* in-place BN on y_pconv1 */
@@ -242,11 +242,11 @@ void encoder_layer2_xdws0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(x, 12, 12, 1, 33,
                  encoder_en_convs_2_pconv_0_weight,
                  encoder_en_convs_2_pconv_0_bias,
-                 E2_PCONV_CONV_QR, y_pconv);
+                 E2_PCONV_CONV_QR, 24, y_pconv);
     pconv2d_func(x + 12 * 33, 12, 12, 1, 33,
-                 encoder_en_convs_2_pconv_0_weight + 12 * 12,
+                 encoder_en_convs_2_pconv_0_weight + 12,
                  encoder_en_convs_2_pconv_0_bias + 12,
-                 E2_PCONV_CONV_QR, y_pconv + 12 * 33);
+                 E2_PCONV_CONV_QR, 24, y_pconv + 12 * 33);
 
     /* BN */
     int32_t y_bn[24 * 33];
@@ -343,11 +343,11 @@ void encoder_layer3_xmb1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(x, 12, 16, 1, 33,
                  encoder_en_convs_3_pconv1_0_weight,
                  encoder_en_convs_3_pconv1_0_bias,
-                 E3_PCONV0_CONV_QR, y_pconv0);
+                 E3_PCONV0_CONV_QR, 32, y_pconv0);
     pconv2d_func(x + 12 * 33, 12, 16, 1, 33,
-                 encoder_en_convs_3_pconv1_0_weight + 16 * 12,
+                 encoder_en_convs_3_pconv1_0_weight + 16,
                  encoder_en_convs_3_pconv1_0_bias + 16,
-                 E3_PCONV0_CONV_QR, y_pconv0 + 16 * 33);
+                 E3_PCONV0_CONV_QR, 32, y_pconv0 + 16 * 33);
 
     /* BN */
     int32_t y_bn0[32 * 33];
@@ -387,11 +387,11 @@ void encoder_layer3_xmb1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(y_tconv_ap, 16, 16, 1, 33,
                  encoder_en_convs_3_pconv2_0_weight,
                  encoder_en_convs_3_pconv2_0_bias,
-                 E3_PCONV1_CONV_QR, y_pconv1);
+                 E3_PCONV1_CONV_QR, 32, y_pconv1);
     pconv2d_func(y_tconv_ap + 16 * 33, 16, 16, 1, 33,
-                 encoder_en_convs_3_pconv2_0_weight + 16 * 16,
+                 encoder_en_convs_3_pconv2_0_weight + 16,
                  encoder_en_convs_3_pconv2_0_bias + 16,
-                 E3_PCONV1_CONV_QR, y_pconv1 + 16 * 33);
+                 E3_PCONV1_CONV_QR, 32, y_pconv1 + 16 * 33);
     bn_func(y_pconv1, encoder_en_convs_3_pconv2_1_weight, encoder_en_convs_3_pconv2_1_bias,
             encoder_en_convs_3_pconv2_1_running_mean, encoder_en_convs_3_pconv2_1_running_var,
             E3_PCONV1_BN_QR1, E3_PCONV1_BN_QR2, 32, 32 * 33, y_pconv1);
@@ -459,11 +459,11 @@ void encoder_layer4_xdws1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
     pconv2d_func(x, 16, 8, 1, 33,
                  encoder_en_convs_4_pconv_0_weight,
                  encoder_en_convs_4_pconv_0_bias,
-                 E4_PCONV_CONV_QR, y_pconv);
+                 E4_PCONV_CONV_QR, 16, y_pconv);
     pconv2d_func(x + 16 * 33, 16, 8, 1, 33,
-                 encoder_en_convs_4_pconv_0_weight + 8 * 16,
+                 encoder_en_convs_4_pconv_0_weight + 8,
                  encoder_en_convs_4_pconv_0_bias + 8,
-                 E4_PCONV_CONV_QR, y_pconv + 8 * 33);
+                 E4_PCONV_CONV_QR, 16, y_pconv + 8 * 33);
 
     /* BN */
     int32_t y_bn[16 * 33];
@@ -832,11 +832,11 @@ void decoder_layer0_de_xdws0(const int32_t *x, const int32_t *skip, ulunas_state
     pconv2d_func(x_con, 8, 16, 1, 33,
                  decoder_de_convs_0_pconv_0_weight,
                  decoder_de_convs_0_pconv_0_bias,
-                 D0_PCONV_CONV_QR, y_pconv);
+                 D0_PCONV_CONV_QR, 32, y_pconv);
     pconv2d_func(x_con + 8 * 33, 8, 16, 1, 33,
-                 decoder_de_convs_0_pconv_0_weight + 16 * 8,
+                 decoder_de_convs_0_pconv_0_weight + 16,
                  decoder_de_convs_0_pconv_0_bias + 16,
-                 D0_PCONV_CONV_QR, y_pconv + 16 * 33);
+                 D0_PCONV_CONV_QR, 32, y_pconv + 16 * 33);
 
     /* BN */
     int32_t y_bn[32 * 33];
@@ -936,11 +936,11 @@ void decoder_layer1_de_xmb0(const int32_t *x, const int32_t *skip, ulunas_state_
     pconv2d_func(x_con, 16, 12, 1, 33,
                  decoder_de_convs_1_pconv1_0_weight,
                  decoder_de_convs_1_pconv1_0_bias,
-                 D1_PCONV0_CONV_QR, y_pconv0);
+                 D1_PCONV0_CONV_QR, 24, y_pconv0);
     pconv2d_func(x_con + 16 * 33, 16, 12, 1, 33,
-                 decoder_de_convs_1_pconv1_0_weight + 12 * 16,
+                 decoder_de_convs_1_pconv1_0_weight + 12,
                  decoder_de_convs_1_pconv1_0_bias + 12,
-                 D1_PCONV0_CONV_QR, y_pconv0 + 12 * 33);
+                 D1_PCONV0_CONV_QR, 24, y_pconv0 + 12 * 33);
 
     /* BN */
     int32_t y_bn0[24 * 33];
@@ -983,11 +983,11 @@ void decoder_layer1_de_xmb0(const int32_t *x, const int32_t *skip, ulunas_state_
     pconv2d_func(y_tconv_ap, 12, 12, 1, 33,
                  decoder_de_convs_1_pconv2_0_weight,
                  decoder_de_convs_1_pconv2_0_bias,
-                 D1_PCONV1_CONV_QR, y_pconv1);
+                 D1_PCONV1_CONV_QR, 24, y_pconv1);
     pconv2d_func(y_tconv_ap + 12 * 33, 12, 12, 1, 33,
-                 decoder_de_convs_1_pconv2_0_weight + 12 * 12,
+                 decoder_de_convs_1_pconv2_0_weight + 12,
                  decoder_de_convs_1_pconv2_0_bias + 12,
-                 D1_PCONV1_CONV_QR, y_pconv1 + 12 * 33);
+                 D1_PCONV1_CONV_QR, 24, y_pconv1 + 12 * 33);
 
     /* BN (in-place on y_pconv1 to get cTFA input) */
     bn_func(y_pconv1, decoder_de_convs_1_pconv2_1_weight, decoder_de_convs_1_pconv2_1_bias,
@@ -1060,11 +1060,11 @@ void decoder_layer2_de_xdws1(const int32_t *x, const int32_t *skip, ulunas_state
     pconv2d_func(x_con, 12, 12, 1, 33,
                  decoder_de_convs_2_pconv_0_weight,
                  decoder_de_convs_2_pconv_0_bias,
-                 D2_PCONV_CONV_QR, y_pconv);
+                 D2_PCONV_CONV_QR, 24, y_pconv);
     pconv2d_func(x_con + 12 * 33, 12, 12, 1, 33,
-                 decoder_de_convs_2_pconv_0_weight + 12 * 12,
+                 decoder_de_convs_2_pconv_0_weight + 12,
                  decoder_de_convs_2_pconv_0_bias + 12,
-                 D2_PCONV_CONV_QR, y_pconv + 12 * 33);
+                 D2_PCONV_CONV_QR, 24, y_pconv + 12 * 33);
 
     /* BN */
     int32_t y_bn0[24 * 33];
@@ -1165,11 +1165,11 @@ void decoder_layer3_de_xmb1(const int32_t *x, const int32_t *skip, ulunas_state_
     pconv2d_func(x_con, 12, 6, 1, 33,
                  decoder_de_convs_3_pconv1_0_weight,
                  decoder_de_convs_3_pconv1_0_bias,
-                 D3_PCONV0_CONV_QR, y_pconv0);
+                 D3_PCONV0_CONV_QR, 12, y_pconv0);
     pconv2d_func(x_con + 12 * 33, 12, 6, 1, 33,
-                 decoder_de_convs_3_pconv1_0_weight + 6 * 12,
+                 decoder_de_convs_3_pconv1_0_weight + 6,
                  decoder_de_convs_3_pconv1_0_bias + 6,
-                 D3_PCONV0_CONV_QR, y_pconv0 + 6 * 33);
+                 D3_PCONV0_CONV_QR, 12, y_pconv0 + 6 * 33);
 
     /* BN */
     int32_t y_bn0[12 * 33];
@@ -1213,11 +1213,11 @@ void decoder_layer3_de_xmb1(const int32_t *x, const int32_t *skip, ulunas_state_
     pconv2d_func(y_tconv_ap, 6, 6, 1, 65,
                  decoder_de_convs_3_pconv2_0_weight,
                  decoder_de_convs_3_pconv2_0_bias,
-                 D3_PCONV1_CONV_QR, y_pconv1);
+                 D3_PCONV1_CONV_QR, 12, y_pconv1);
     pconv2d_func(y_tconv_ap + 6 * 65, 6, 6, 1, 65,
-                 decoder_de_convs_3_pconv2_0_weight + 6 * 6,
+                 decoder_de_convs_3_pconv2_0_weight + 6,
                  decoder_de_convs_3_pconv2_0_bias + 6,
-                 D3_PCONV1_CONV_QR, y_pconv1 + 6 * 65);
+                 D3_PCONV1_CONV_QR, 12, y_pconv1 + 6 * 65);
 
     /* BN (in-place) */
     bn_func(y_pconv1, decoder_de_convs_3_pconv2_1_weight, decoder_de_convs_3_pconv2_1_bias,

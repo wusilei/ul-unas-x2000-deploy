@@ -190,6 +190,7 @@ void conv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
  */
 void pconv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
                   const int16_t *weight, const int32_t *bias, int Qr,
+                  int weight_stride,
                   int32_t *y);
 
 /**

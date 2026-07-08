@@ -89,6 +89,7 @@ void conv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
  */
 void pconv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
                   const int16_t *weight, const int32_t *bias, int Qr,
+                  int weight_stride,
                   int32_t *y) {
     int shift = -Qr;
     int64_t round_const = ((int64_t)1 << (shift - 1));
@@ -99,8 +100,8 @@ void pconv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
             int64_t acc = 0;
             for (int nIn = 0; nIn < Cin; nIn++) {
                 int32_t x_val = x[nIn * Wout + w];
-                /* weight[Cout][Cin][1][1] → [Cout][Cin] col-major: weight[co + Cout*ci] */
-                int16_t w_val = weight[nOut + Cout * nIn];
+                /* weight[total_Cout][Cin] col-major: weight[co + stride*ci] */
+                int16_t w_val = weight[nOut + weight_stride * nIn];
                 int64_t prod = (int64_t)x_val * w_val;
                 if (prod >= 0) acc += (int32_t)((prod + round_const) >> shift);
                 else           acc += (int32_t)((prod - round_const) >> shift);
@@ -652,23 +653,26 @@ void gru_module(const int32_t *x_t, int nHidden, int in_dim,
 
     /* --- Reset gate R --- */
     for (int j = 0; j < nHidden; j++) {
-        int64_t acc = 0;
+        /* MATLAB: round(Σ x_t[i]*w[i] * 2^Qr) — sum first, then round */
+        int64_t sum_ih = 0, sum_hh = 0;
 
-        /* ih path: x_t * ih_r_weight, col-major: ih_weight[i + in_dim*j] */
+        /* ih path: sum in Q32, then round */
         for (int i = 0; i < in_dim; i++) {
-            int16_t w = ih_weight[i + in_dim * j];  /* ih_r = first nHidden */
-            int64_t prod = (int64_t)x_t[i] * w;
-            if (prod >= 0) acc += (prod + r1) >> shift1;
-            else           acc += (prod - r1) >> shift1;
+            int16_t w = ih_weight[i + in_dim * j];
+            sum_ih += (int64_t)x_t[i] * w;
         }
 
-        /* hh path: h_cache * hh_r_weight, col-major: hh_weight[i + nHidden*j] */
+        /* hh path: sum in Q27, then round */
         for (int i = 0; i < nHidden; i++) {
             int16_t w = hh_weight[i + nHidden * j];
-            int64_t prod = (int64_t)h_cache[i] * w;
-            if (prod >= 0) acc += (prod + r2) >> shift2;
-            else           acc += (prod - r2) >> shift2;
+            sum_hh += (int64_t)h_cache[i] * w;
         }
+
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
 
         /* Bias: ih_r_bias[j] + hh_r_bias[j] — both stored as int32_t (Q10 → scaled to Q20) */
         /* Actually bias is in s16f10 range but stored as int32_t. The MATLAB does:
@@ -752,19 +756,20 @@ void gru_module(const int32_t *x_t, int nHidden, int in_dim,
 
     /* --- Update gate Z --- */
     for (int j = 0; j < nHidden; j++) {
-        int64_t acc = 0;
+        int64_t sum_ih = 0, sum_hh = 0;
         for (int i = 0; i < in_dim; i++) {
             int16_t w = ih_weight[i + in_dim * (nHidden + j)];  /* ih_z */
-            int64_t prod = (int64_t)x_t[i] * w;
-            if (prod >= 0) acc += (prod + r1) >> shift1;
-            else           acc += (prod - r1) >> shift1;
+            sum_ih += (int64_t)x_t[i] * w;
         }
         for (int i = 0; i < nHidden; i++) {
             int16_t w = hh_weight[i + nHidden * (nHidden + j)];  /* hh_z */
-            int64_t prod = (int64_t)h_cache[i] * w;
-            if (prod >= 0) acc += (prod + r2) >> shift2;
-            else           acc += (prod - r2) >> shift2;
+            sum_hh += (int64_t)h_cache[i] * w;
         }
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
         acc += ih_bias[nHidden + j] + hh_bias[nHidden + j];
         z_buf[j] = sat_i32(acc);
     }
@@ -772,26 +777,28 @@ void gru_module(const int32_t *x_t, int nHidden, int in_dim,
     /* --- Candidate hidden state N --- */
     /* h_t = round(h * hh_n_w * 2^Qr2) + hh_n_b */
     for (int j = 0; j < nHidden; j++) {
-        int64_t acc = 0;
+        int64_t sum_hh = 0;
         for (int i = 0; i < nHidden; i++) {
             int16_t w = hh_weight[i + nHidden * (2 * nHidden + j)];  /* hh_n */
-            int64_t prod = (int64_t)h_cache[i] * w;
-            if (prod >= 0) acc += (prod + r2) >> shift2;
-            else           acc += (prod - r2) >> shift2;
+            sum_hh += (int64_t)h_cache[i] * w;
         }
+        int64_t acc = 0;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
         acc += hh_bias[2 * nHidden + j];
         h_t_buf[j] = sat_i32(acc);
     }
 
     /* n_t = round(x_t * ih_n_w * 2^Qr1) + round(r_t .* h_t * 2^(-15)) + ih_n_b */
     for (int j = 0; j < nHidden; j++) {
-        int64_t acc = 0;
+        int64_t sum_ih = 0;
         for (int i = 0; i < in_dim; i++) {
             int16_t w = ih_weight[i + in_dim * (2 * nHidden + j)];  /* ih_n */
-            int64_t prod = (int64_t)x_t[i] * w;
-            if (prod >= 0) acc += (prod + r1) >> shift1;
-            else           acc += (prod - r1) >> shift1;
+            sum_ih += (int64_t)x_t[i] * w;
         }
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
         /* r_t .* h_t * 2^(-15): both are Q20? No, r_t becomes Q15 after sigmoid...
          * Actually, r_t stays Q20 before sigmoid. After sigmoid r_t is Q15.
          * h_t_buf is Q20 (from hh path).

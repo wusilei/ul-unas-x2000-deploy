@@ -24,8 +24,7 @@
 #define WIN_LEN     512
 #define WIN_INC     256
 #define N_BINS      257
-#define FRAME_IN    200
-#define FRAME_16K   400
+#define FRAME_IN    200      /* 25ms @ 8kHz */
 #define FIFO_SZ     (WIN_LEN * 4)
 #define WARMUP_MUTE 5
 #define WARMUP_FADE 3
@@ -117,12 +116,11 @@ static int     g_ola_pos;
 static int16_t g_out_fifo[FIFO_SZ];
 static int     g_out_rpos, g_out_count;
 static int     g_frame_count;
-static int16_t g_last_in_8k;
 
 void noise_init(void) {
     ulunas_state_init(&g_state);
     g_fifo_wpos = g_fifo_count = 0; g_ola_pos = 0;
-    g_out_rpos = g_out_count = 0; g_frame_count = 0; g_last_in_8k = 0;
+    g_out_rpos = g_out_count = 0; g_frame_count = 0;
     memset(g_fifo, 0, sizeof(g_fifo));
     memset(g_ola, 0, sizeof(g_ola));
     memset(g_out_fifo, 0, sizeof(g_out_fifo));
@@ -131,16 +129,11 @@ void noise_init(void) {
 void noise_deinit(void) { }
 
 void noise_reduction(short *voiceIn, short *voiceOut) {
-    /* ── 1. 8kHz → 16kHz 上采样 (纯整数 Q15) ── */
+    /* ── 1. 8kHz PCM 直入 FIFO (无需上采样, ERB映射与采样率无关) ── */
     for (int i = 0; i < FRAME_IN; i++) {
-        int16_t s_curr = voiceIn[i];
-        int16_t s_prev = g_last_in_8k;
-        g_fifo[g_fifo_wpos] = s_curr;
+        g_fifo[g_fifo_wpos] = voiceIn[i];
         g_fifo_wpos = (g_fifo_wpos + 1) % FIFO_SZ;
-        g_fifo[g_fifo_wpos] = (int16_t)(((int)s_prev + (int)s_curr) >> 1);
-        g_fifo_wpos = (g_fifo_wpos + 1) % FIFO_SZ;
-        g_fifo_count += 2;
-        g_last_in_8k = voiceIn[i];
+        g_fifo_count++;
     }
 
     /* ── 2. STFT→DENOISE→ISTFT (全定点, 零 float, 零除法) ── */
@@ -248,7 +241,7 @@ void noise_reduction(short *voiceIn, short *voiceOut) {
         }
     }
 
-    /* ── 3. 输出 8kHz PCM ── */
+    /* ── 3. 输出 8kHz PCM (16k→8k 降采样: 平均相邻对) ── */
     if (g_out_count >= FRAME_16K) {
         int32_t gain_q15 = 32768;
         if (g_frame_count < WARMUP_MUTE) gain_q15 = 0;

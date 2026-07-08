@@ -1559,6 +1559,51 @@ int main(int argc, char **argv) {
                         printf("  D3.ctfa_in : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                         printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d3_pc1[i]); printf("\n");
                         printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d3_ctfa_in[i]); printf("\n");
+
+                        /* D3 TA (inline, matching ctfa_ta_module) */
+                        snprintf(path, sizeof(path), "%s/frame0_dec_d3_ctfa_ta.bin", dir);
+                        uint16_t *g_d3_ta = load_uint16(path, 12);
+                        if (g_d3_ta) {
+                            int16_t ta_cache_diag[24] = {0};
+                            uint16_t d3_ta[12];
+                            ctfa_ta_module(d3_pc1, 12, 65, D3_CTFA_TA_GRU_NHID, ta_cache_diag,
+                                           decoder_de_convs_3_pconv2_2_ta_gru_weight_ih_l0,
+                                           decoder_de_convs_3_pconv2_2_ta_gru_bias_ih_l0,
+                                           decoder_de_convs_3_pconv2_2_ta_gru_weight_hh_l0,
+                                           decoder_de_convs_3_pconv2_2_ta_gru_bias_hh_l0,
+                                           decoder_de_convs_3_pconv2_2_ta_fc_weight,
+                                           decoder_de_convs_3_pconv2_2_ta_fc_bias,
+                                           D3_CTFA_TA_GRU_QR1, D3_CTFA_TA_GRU_QR2, D3_CTFA_TA_FC_QR, d3_ta);
+                            double snr_ta = snr_db_u16(g_d3_ta, d3_ta, 12);
+                            printf("  D3.ta      : SNR=%7.2f dB  [%s]\n", snr_ta, status(snr_ta));
+                            printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %5u", d3_ta[i]); printf("\n");
+                            printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %5u", g_d3_ta[i]); printf("\n");
+                            free(g_d3_ta);
+                        }
+
+                        /* D3 FA */
+                        snprintf(path, sizeof(path), "%s/frame0_dec_d3_ctfa_fa.bin", dir);
+                        uint16_t *g_d3_fa = load_uint16(path, 65);
+                        if (g_d3_fa) {
+                            uint16_t d3_fa[65];
+                            ctfa_fa_module(d3_pc1, 12, 65, D3_CTFA_FA_GRU_NHID,
+                                           D3_CTFA_FA_GROUP, D3_CTFA_FA_SEG, D3_CTFA_FA_PAD,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_weight_ih_l0,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_bias_ih_l0,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_weight_hh_l0,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_bias_hh_l0,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_weight_ih_l0_reverse,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_bias_ih_l0_reverse,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_weight_hh_l0_reverse,
+                                           decoder_de_convs_3_pconv2_2_fa_gru_bias_hh_l0_reverse,
+                                           decoder_de_convs_3_pconv2_2_fa_fc_weight,
+                                           decoder_de_convs_3_pconv2_2_fa_fc_bias,
+                                           D3_CTFA_FA_GRU_QR1, D3_CTFA_FA_GRU_QR2, D3_CTFA_FA_FC_QR, d3_fa);
+                            double snr_fa = snr_db_u16(g_d3_fa, d3_fa, 65);
+                            printf("  D3.fa      : SNR=%7.2f dB  [%s]\n", snr_fa, status(snr_fa));
+                            free(g_d3_fa);
+                        }
+
                         free(g_d3_ctfa_in);
                     }
                 }

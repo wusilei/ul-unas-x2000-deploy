@@ -141,6 +141,18 @@ static double snr_db_2d_i32(const int32_t *golden, const int32_t *test, int C, i
     return s;
 }
 
+/* SNR for 2D int16: golden [C][W] col-major, test [C][W] row-major */
+static double snr_db_2d_i16(const int16_t *golden, const int16_t *test, int C, int W) {
+    int N = C * W;
+    int16_t *gt = malloc(N * sizeof(int16_t));
+    for (int c = 0; c < C; c++)
+        for (int w = 0; w < W; w++)
+            gt[c * W + w] = golden[c + C * w];
+    double s = snr_db_i16(gt, test, N);
+    free(gt);
+    return s;
+}
+
 /* ================================================================
  * Main
  * ================================================================ */
@@ -1025,17 +1037,17 @@ int main(int argc, char **argv) {
             if (!golden_e4) {
                 printf("  rnn1 iso   : SKIP (no golden E4)\n");
             } else {
-            /* Transpose: golden_e4 is [16][33] (MATLAB col-major) → x_tpose[33][16] */
+            /* Transpose: golden_e4 is [16][33] col-major: g[c + 16*t] → x_tpose[33][16] */
             int32_t x_tpose[33 * 16];
             for (int t = 0; t < 33; t++)
                 for (int c = 0; c < 16; c++)
-                    x_tpose[t * 16 + c] = golden_e4[c * 33 + t];
+                    x_tpose[t * 16 + c] = golden_e4[c + 16 * t];
 
-            /* Check intra input */
+            /* Check intra input — golden is [33][16] col-major, C is row-major */
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_in.bin", dir);
             int32_t *g_intra_in = load_int32(path, 33 * 16);
             if (g_intra_in) {
-                double snr = snr_db_i32(g_intra_in, x_tpose, 33 * 16);
+                double snr = snr_db_2d_i32(g_intra_in, x_tpose, 33, 16);
                 printf("  rnn1.intra_in : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_intra_in);
             }
@@ -1063,7 +1075,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_gru0.bin", dir);
             int16_t *g_ig0 = load_int16(path, 33 * 8);
             if (g_ig0) {
-                double snr = snr_db_i16(g_ig0, x0_gru, 33 * 8);
+                double snr = snr_db_2d_i16(g_ig0, x0_gru, 33, 8);
                 printf("  rnn1.intra_gru0: SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", x0_gru[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_ig0[i]); printf("\n");
@@ -1086,7 +1098,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_gru1.bin", dir);
             int16_t *g_ig1 = load_int16(path, 33 * 8);
             if (g_ig1) {
-                double snr = snr_db_i16(g_ig1, x1_gru, 33 * 8);
+                double snr = snr_db_2d_i16(g_ig1, x1_gru, 33, 8);
                 printf("  rnn1.intra_gru1: SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_ig1);
             }
@@ -1101,7 +1113,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_cat.bin", dir);
             int16_t *g_icat = load_int16(path, 33 * 16);
             if (g_icat) {
-                double snr = snr_db_i16(g_icat, x_cat, 33 * 16);
+                double snr = snr_db_2d_i16(g_icat, x_cat, 33, 16);
                 printf("  rnn1.intra_cat : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_icat);
             }
@@ -1125,7 +1137,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_fc.bin", dir);
             int32_t *g_ifc = load_int32(path, 33 * 16);
             if (g_ifc) {
-                double snr = snr_db_i32(g_ifc, x_fc_i, 33 * 16);
+                double snr = snr_db_2d_i32(g_ifc, x_fc_i, 33, 16);
                 printf("  rnn1.intra_fc  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_fc_i[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_ifc[i]); printf("\n");
@@ -1140,7 +1152,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_ln.bin", dir);
             int32_t *g_iln = load_int32(path, 33 * 16);
             if (g_iln) {
-                double snr = snr_db_i32(g_iln, x_ln_i, 33 * 16);
+                double snr = snr_db_2d_i32(g_iln, x_ln_i, 33, 16);
                 printf("  rnn1.intra_ln  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_ln_i[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_iln[i]); printf("\n");
@@ -1151,17 +1163,17 @@ int main(int argc, char **argv) {
             int32_t y_intra[16 * 33];
             for (int t = 0; t < 33; t++)
                 for (int c = 0; c < 16; c++)
-                    y_intra[c * 33 + t] = sat_i32((int64_t)golden_e4[c * 33 + t] + x_ln_i[t * 16 + c]);
+                    y_intra[c * 33 + t] = sat_i32((int64_t)golden_e4[c + 16 * t] + x_ln_i[t * 16 + c]);
 
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_out.bin", dir);
             int32_t *g_iout = load_int32(path, 33 * 16);
             if (g_iout) {
-                /* Golden is [33][16], C output is [16][33] — transpose for comparison */
+                /* Golden [33][16] col-major → C [16][33] row-major */
                 int32_t *gt = malloc(33 * 16 * sizeof(int32_t));
-                for (int t = 0; t < 33; t++)
-                    for (int c = 0; c < 16; c++)
-                        gt[t * 16 + c] = g_iout[t * 16 + c];
-                double snr = snr_db_2d_i32(gt, y_intra, 16, 33);
+                for (int c = 0; c < 16; c++)
+                    for (int t = 0; t < 33; t++)
+                        gt[c * 33 + t] = g_iout[t + 33 * c];
+                double snr = snr_db_i32(gt, y_intra, 33 * 16);
                 printf("  rnn1.intra_out : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(gt); free(g_iout);
             }
@@ -1180,7 +1192,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_in.bin", dir);
             int32_t *g_inter_in = load_int32(path, 33 * 16);
             if (g_inter_in) {
-                double snr = snr_db_i32(g_inter_in, x_inter, 33 * 16);
+                double snr = snr_db_2d_i32(g_inter_in, x_inter, 33, 16);
                 printf("  rnn1.inter_in  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_inter_in);
             }
@@ -1219,7 +1231,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_gru0.bin", dir);
             int16_t *g_eg0 = load_int16(path, 33 * 8);
             if (g_eg0) {
-                double snr = snr_db_i16(g_eg0, xi0_gru, 33 * 8);
+                double snr = snr_db_2d_i16(g_eg0, xi0_gru, 33, 8);
                 printf("  rnn1.inter_gru0: SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", xi0_gru[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_eg0[i]); printf("\n");
@@ -1229,7 +1241,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_gru1.bin", dir);
             int16_t *g_eg1 = load_int16(path, 33 * 8);
             if (g_eg1) {
-                double snr = snr_db_i16(g_eg1, xi1_gru, 33 * 8);
+                double snr = snr_db_2d_i16(g_eg1, xi1_gru, 33, 8);
                 printf("  rnn1.inter_gru1: SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_eg1);
             }
@@ -1244,7 +1256,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_cat.bin", dir);
             int16_t *g_ecat = load_int16(path, 33 * 16);
             if (g_ecat) {
-                double snr = snr_db_i16(g_ecat, xi_cat, 33 * 16);
+                double snr = snr_db_2d_i16(g_ecat, xi_cat, 33, 16);
                 printf("  rnn1.inter_cat : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(g_ecat);
             }
@@ -1268,7 +1280,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_fc.bin", dir);
             int32_t *g_efc = load_int32(path, 33 * 16);
             if (g_efc) {
-                double snr = snr_db_i32(g_efc, x_fc_e, 33 * 16);
+                double snr = snr_db_2d_i32(g_efc, x_fc_e, 33, 16);
                 printf("  rnn1.inter_fc  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_fc_e[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_efc[i]); printf("\n");
@@ -1283,7 +1295,7 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_ln.bin", dir);
             int32_t *g_eln = load_int32(path, 33 * 16);
             if (g_eln) {
-                double snr = snr_db_i32(g_eln, x_ln_e, 33 * 16);
+                double snr = snr_db_2d_i32(g_eln, x_ln_e, 33, 16);
                 printf("  rnn1.inter_ln  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_ln_e[i]); printf("\n");
                 printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_eln[i]); printf("\n");
@@ -1299,11 +1311,12 @@ int main(int argc, char **argv) {
             snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_out.bin", dir);
             int32_t *g_eout = load_int32(path, 33 * 16);
             if (g_eout) {
+                /* Golden [33][16] col-major → C [16][33] row-major */
                 int32_t *gt = malloc(33 * 16 * sizeof(int32_t));
-                for (int t = 0; t < 33; t++)
-                    for (int c = 0; c < 16; c++)
-                        gt[t * 16 + c] = g_eout[t * 16 + c];
-                double snr = snr_db_2d_i32(gt, y_inter, 16, 33);
+                for (int c = 0; c < 16; c++)
+                    for (int t = 0; t < 33; t++)
+                        gt[c * 33 + t] = g_eout[t + 33 * c];
+                double snr = snr_db_i32(gt, y_inter, 33 * 16);
                 printf("  rnn1.inter_out : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(gt); free(g_eout);
             }
@@ -1327,6 +1340,138 @@ int main(int argc, char **argv) {
             printf("  rnn2      : SNR=%7.2f dB  [%s]\n", snr, status(snr));
             tested++; if (snr > 80.0) passed++;
             free(gr2);
+        }
+
+        /* --- Decoder Isolation Test (frame 0 only, golden inputs) --- */
+        if (frame == 0) {
+            printf("\n  --- Decoder Layer Isolation (golden inputs) ---\n");
+            /* Decoder layer specs: {input_name, skip_name, output_name, Cin, Cout, Win, Wout} */
+            const char *d_skip_names[] = {"enc_e4", "enc_e3", "enc_e2", "enc_e1", "enc_e0"};
+            const char *d_out_names[]  = {"dec_d0", "dec_d1", "dec_d2", "dec_d3", "dec"};
+            int d_Cin[]  = {16, 32, 24, 24, 12};
+            int d_Cout[] = {32, 24, 24, 12, 1};
+            int d_Win[]  = {33, 33, 33, 33, 65};
+            int d_Wout[] = {33, 33, 33, 65, 129};
+            /* Skip dimensions match the encoder source, not decoder output */
+            int d_skipC[] = {16, 32, 24, 24, 12};
+            int d_skipW[] = {33, 33, 33, 33, 65};
+
+            for (int dl = 0; dl < 5; dl++) {
+                /* Load golden input */
+                const char *in_name = (dl == 0) ? "rnn2" : d_out_names[dl - 1];
+                int in_sz = d_Cin[dl] * d_Win[dl];
+                snprintf(path, sizeof(path), "%s/frame0_%s.bin", dir, in_name);
+                int32_t *d_golden_in = load_int32(path, in_sz);
+                if (!d_golden_in) { printf("  D%d iso    : SKIP (no golden input: %s)\n", dl, in_name); continue; }
+
+                /* Convert to row-major */
+                int32_t *d_in_rm = malloc(in_sz * sizeof(int32_t));
+                for (int c = 0; c < d_Cin[dl]; c++)
+                    for (int w = 0; w < d_Win[dl]; w++)
+                        d_in_rm[c * d_Win[dl] + w] = d_golden_in[c + d_Cin[dl] * w];
+
+                /* Load golden skip */
+                int skip_sz = d_skipC[dl] * d_skipW[dl];
+                snprintf(path, sizeof(path), "%s/frame0_%s.bin", dir, d_skip_names[dl]);
+                int32_t *d_golden_skip = load_int32(path, skip_sz);
+                if (!d_golden_skip) { printf("  D%d iso    : SKIP (no golden skip: %s)\n", dl, d_skip_names[dl]); free(d_golden_in); free(d_in_rm); continue; }
+                int32_t *d_skip_rm = malloc(skip_sz * sizeof(int32_t));
+                for (int c = 0; c < d_skipC[dl]; c++)
+                    for (int w = 0; w < d_skipW[dl]; w++)
+                        d_skip_rm[c * d_skipW[dl] + w] = d_golden_skip[c + d_skipC[dl] * w];
+
+                /* Load golden output */
+                snprintf(path, sizeof(path), "%s/frame0_%s.bin", dir, d_out_names[dl]);
+                int32_t *d_golden_out = load_int32(path, d_Cout[dl] * d_Wout[dl]);
+                if (!d_golden_out) { printf("  D%d iso    : SKIP (no golden output)\n", dl); free(d_golden_in); free(d_in_rm); free(d_golden_skip); free(d_skip_rm); continue; }
+
+                ulunas_state_t d_st;
+                ulunas_state_init(&d_st);
+                int32_t *d_c_out = malloc(d_Cout[dl] * d_Wout[dl] * sizeof(int32_t));
+
+                switch (dl) {
+                case 0: decoder_layer0_de_xdws0(d_in_rm, d_skip_rm, &d_st, d_c_out); break;
+                case 1: decoder_layer1_de_xmb0(d_in_rm, d_skip_rm, &d_st, d_c_out); break;
+                case 2: decoder_layer2_de_xdws1(d_in_rm, d_skip_rm, &d_st, d_c_out); break;
+                case 3: decoder_layer3_de_xmb1(d_in_rm, d_skip_rm, &d_st, d_c_out); break;
+                case 4: decoder_layer4_de_xconv(d_in_rm, d_skip_rm, &d_st, d_c_out); break;
+                }
+
+                double snr = snr_db_2d_i32(d_golden_out, d_c_out, d_Cout[dl], d_Wout[dl]);
+                printf("  D%d iso    : SNR=%7.2f dB  [%s] (golden input)\n", dl, snr, status(snr));
+
+                /* D0 sub-step diagnostics */
+                if (dl == 0) {
+                    /* D0 TConv+BN+AP output */
+                    snprintf(path, sizeof(path), "%s/frame0_dec_d0_tconv.bin", dir);
+                    int32_t *g_d0_tc = load_int32(path, 32 * 33);
+                    if (g_d0_tc) {
+                        /* Re-run D0 up to TConv using golden inputs */
+                        ulunas_state_t d0s_st;
+                        ulunas_state_init(&d0s_st);
+                        int32_t d0_con[16 * 33];
+                        for (int i = 0; i < 16 * 33; i++)
+                            d0_con[i] = sat_i32((int64_t)d_in_rm[i] + d_skip_rm[i]);
+                        int32_t d0_pc[32 * 33], d0_bn[32 * 33], d0_ap[32 * 33], d0_s[32 * 33];
+                        int32_t d0_tconv[32 * 33];
+                        pconv2d_func(d0_con, 8, 16, 1, 33, decoder_de_convs_0_pconv_0_weight,
+                                     decoder_de_convs_0_pconv_0_bias, D0_PCONV_CONV_QR, 32, d0_pc);
+                        pconv2d_func(d0_con + 8*33, 8, 16, 1, 33, decoder_de_convs_0_pconv_0_weight + 16,
+                                     decoder_de_convs_0_pconv_0_bias + 16, D0_PCONV_CONV_QR, 32, d0_pc + 16*33);
+                        bn_func(d0_pc, decoder_de_convs_0_pconv_1_weight, decoder_de_convs_0_pconv_1_bias,
+                                decoder_de_convs_0_pconv_1_running_mean, decoder_de_convs_0_pconv_1_running_var,
+                                D0_PCONV_BN_QR1, D0_PCONV_BN_QR2, 32, 32*33, d0_bn);
+                        affineprelu_func(d0_bn, decoder_de_convs_0_pconv_2_affine_weight,
+                                         decoder_de_convs_0_pconv_2_affine_bias,
+                                         decoder_de_convs_0_pconv_2_slope_weight,
+                                         D0_PCONV_AFFINE_QR1, D0_PCONV_AFFINE_QR2, 32, 33, d0_ap);
+                        shuffle_interleave(d0_ap, 32, 33, d0_s);
+
+                        /* Check PConv+BN+AP golden */
+                        snprintf(path, sizeof(path), "%s/frame0_d0_pconv0.bin", dir);
+                        int32_t *g_d0_pc = load_int32(path, 32 * 33);
+                        if (g_d0_pc) {
+                            double snr = snr_db_2d_i32(g_d0_pc, d0_ap, 32, 33);
+                            printf("  D0.pconv0  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d0_ap[i]); printf("\n");
+                            printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d0_pc[i]); printf("\n");
+                            free(g_d0_pc);
+                        }
+
+                        /* Check Shuffle golden */
+                        snprintf(path, sizeof(path), "%s/frame0_d0_shuf.bin", dir);
+                        int32_t *g_d0_sh = load_int32(path, 32 * 33);
+                        if (g_d0_sh) {
+                            double snr = snr_db_2d_i32(g_d0_sh, d0_s, 32, 33);
+                            printf("  D0.shuf    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                            free(g_d0_sh);
+                        }
+
+                        non_gtconv2d_func(d0_s, 32, 1, 33, 1, 5, 1, 1,
+                                          decoder_de_convs_0_dconv_1_weight, decoder_de_convs_0_dconv_1_bias,
+                                          D0_NONTCONV_CONV_QR, d0_tconv);
+                        int32_t d0_tc_bn[32*33];
+                        bn_func(d0_tconv, decoder_de_convs_0_dconv_2_weight, decoder_de_convs_0_dconv_2_bias,
+                                decoder_de_convs_0_dconv_2_running_mean, decoder_de_convs_0_dconv_2_running_var,
+                                D0_NONTCONV_BN_QR1, D0_NONTCONV_BN_QR2, 32, 32*33, d0_tc_bn);
+                        int32_t d0_tc_ap[32*33];
+                        affineprelu_func(d0_tc_bn, decoder_de_convs_0_dconv_3_affine_weight,
+                                         decoder_de_convs_0_dconv_3_affine_bias,
+                                         decoder_de_convs_0_dconv_3_slope_weight,
+                                         D0_NONTCONV_AFFINE_QR1, D0_NONTCONV_AFFINE_QR2, 32, 33, d0_tc_ap);
+
+                        /* Check TConv golden */
+                        double snr_tc = snr_db_2d_i32(g_d0_tc, d0_tc_ap, 32, 33);
+                        printf("  D0.tconv   : SNR=%7.2f dB  [%s]\n", snr_tc, status(snr_tc));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d0_tc_ap[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d0_tc[i]); printf("\n");
+                        free(g_d0_tc);
+                    }
+                }
+
+                free(d_golden_in); free(d_in_rm); free(d_golden_skip); free(d_skip_rm);
+                free(d_golden_out); free(d_c_out);
+            }
         }
 
         /* Step 5-8: Decoder + Sigmoid + BS + MASK */

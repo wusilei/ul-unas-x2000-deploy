@@ -1,13 +1,15 @@
 /**
- * noise_reduction_q15.c — 全Q15 FFT (正向+逆向) + 定点OLA
+ * ulunas_nr.c — X2000 全定点降噪: Q15 FFT + UL-UNAS + WOLA
  * ==========================================================
- * 改动 vs noise_reduction.c (混合版):
- *   - KissFFT 正向 → fft_q15_forward (Q15→float 输出给 DENOISE)
- *   - KissFFT 逆向 → fft_q15_inverse (已是 Q15, 不变)
- *   - OLA: float → int32 (消除 float 累加)
+ * v4: zero float, zero int64 divide. MATLAB stft_window + 预计算WOLA倒数表.
  *
- * 编译: 直接替换 noise_reduction.c
+ * 定点路径:
+ *   PCM Q15 → stft_window → fft_q15_forward → Q15→Q20(<<5)
+ *   → log_gen→BM→Enc→GDPRNN→Dec→Sigmoid→BS→MASK (全定点)
+ *   → CRM Q20→Q15(>>5) → fft_q15_inverse → ×window >>24 → OLA
+ *   → WOLA归一化 (×inv_table >>15) → 增益校准 → 输出 Q15
  */
+
 #include "noise_reduction.h"
 #include "ulunas_fp.h"
 #include "ulunas_lut.h"
@@ -28,7 +30,7 @@
 #define WARMUP_MUTE 5
 #define WARMUP_FADE 3
 
-/* Q15 stft_window from MATLAB stft_window.mat */
+/* ──── MATLAB stft_window.mat quantized to Q15 ──── */
 static const int16_t stft_win_q15[512] = {
        0,     1,     5,    11,    20,    31,    44,    60,    79,   100,   123,   149,   177,   208,   241,   277,
      315,   355,   398,   443,   491,   541,   593,   648,   705,   765,   827,   891,   958,  1027,  1098,  1171,
@@ -64,13 +66,65 @@ static const int16_t stft_win_q15[512] = {
      315,   277,   241,   208,   177,   149,   123,   100,    79,    60,    44,    31,    20,    11,     5,     1
 };
 
+/* ──── WOLA 预计算倒数表 (Q30) ────
+ * 50%% 重叠: win²_sum[i] = win²[i] + win²[i+256], i=0..255 (Q15)
+ * wola_inv[i] = round(2^30 / win²_sum[i])
+ * 归一化: v_out = (v_ola * wola_inv[ola_pos%%256] + 2^14) >> 15
+ */
+static const uint32_t wola_inv_q30[256] = {
+     32768u, 32770u, 32778u, 32790u, 32807u, 32830u, 32857u, 32889u,
+     32927u, 32968u, 33016u, 33067u, 33125u, 33187u, 33254u, 33326u,
+     33404u, 33486u, 33573u, 33667u, 33765u, 33868u, 33976u, 34090u,
+     34210u, 34333u, 34463u, 34599u, 34739u, 34886u, 35037u, 35194u,
+     35358u, 35525u, 35700u, 35879u, 36064u, 36255u, 36452u, 36655u,
+     36864u, 37078u, 37300u, 37525u, 37757u, 37996u, 38241u, 38492u,
+     38748u, 39011u, 39279u, 39556u, 39836u, 40125u, 40416u, 40717u,
+     41023u, 41334u, 41653u, 41977u, 42308u, 42644u, 42988u, 43336u,
+     43691u, 44051u, 44417u, 44788u, 45166u, 45548u, 45937u, 46332u,
+     46729u, 47133u, 47540u, 47954u, 48371u, 48793u, 49218u, 49646u,
+     50079u, 50512u, 50953u, 51392u, 51837u, 52281u, 52725u, 53171u,
+     53620u, 54068u, 54516u, 54962u, 55407u, 55851u, 56291u, 56731u,
+     57163u, 57595u, 58018u, 58441u, 58858u, 59264u, 59666u, 60059u,
+     60445u, 60818u, 61182u, 61540u, 61880u, 62213u, 62532u, 62840u,
+     63135u, 63411u, 63678u, 63925u, 64158u, 64373u, 64570u, 64750u,
+     64910u, 65056u, 65182u, 65293u, 65376u, 65448u, 65496u, 65528u,
+     65536u, 65528u, 65496u, 65448u, 65376u, 65293u, 65182u, 65056u,
+     64910u, 64750u, 64570u, 64373u, 64158u, 63925u, 63678u, 63411u,
+     63135u, 62840u, 62532u, 62213u, 61880u, 61540u, 61182u, 60818u,
+     60445u, 60059u, 59666u, 59264u, 58858u, 58441u, 58018u, 57595u,
+     57163u, 56731u, 56291u, 55851u, 55407u, 54962u, 54516u, 54068u,
+     53620u, 53171u, 52725u, 52281u, 51837u, 51392u, 50953u, 50512u,
+     50079u, 49646u, 49218u, 48793u, 48371u, 47954u, 47540u, 47133u,
+     46729u, 46332u, 45937u, 45548u, 45166u, 44788u, 44417u, 44051u,
+     43691u, 43336u, 42988u, 42644u, 42308u, 41977u, 41653u, 41334u,
+     41023u, 40717u, 40416u, 40125u, 39836u, 39556u, 39279u, 39011u,
+     38748u, 38492u, 38241u, 37996u, 37757u, 37525u, 37300u, 37078u,
+     36864u, 36655u, 36452u, 36255u, 36064u, 35879u, 35700u, 35525u,
+     35358u, 35194u, 35037u, 34886u, 34739u, 34599u, 34463u, 34333u,
+     34210u, 34090u, 33976u, 33868u, 33765u, 33667u, 33573u, 33486u,
+     33404u, 33326u, 33254u, 33187u, 33125u, 33067u, 33016u, 32968u,
+     32927u, 32889u, 32857u, 32830u, 32807u, 32790u, 32778u, 32770u
+};
+
+/* 全局输出增益 (Q15, 1.0=32768). 校准时调整此值使 RMS 匹配 Python 参考. */
+#define OUTPUT_GAIN_Q15  32768
+
+static ulunas_state_t g_state;
+static int16_t g_fifo[FIFO_SZ];
+static int     g_fifo_wpos, g_fifo_count;
+static int32_t g_ola[WIN_LEN + WIN_INC];
+static int     g_ola_pos;
+static int16_t g_out_fifo[FIFO_SZ];
+static int     g_out_rpos, g_out_count;
+static int     g_frame_count;
+static int16_t g_last_in_8k;
+
 void noise_init(void) {
     ulunas_state_init(&g_state);
     g_fifo_wpos = g_fifo_count = 0; g_ola_pos = 0;
     g_out_rpos = g_out_count = 0; g_frame_count = 0; g_last_in_8k = 0;
     memset(g_fifo, 0, sizeof(g_fifo));
     memset(g_ola, 0, sizeof(g_ola));
-    memset(g_wola_sum, 0, sizeof(g_wola_sum));
     memset(g_out_fifo, 0, sizeof(g_out_fifo));
 }
 
@@ -89,69 +143,101 @@ void noise_reduction(short *voiceIn, short *voiceOut) {
         g_last_in_8k = voiceIn[i];
     }
 
-    /* ── 2. STFT→DENOISE→ISTFT ── */
+    /* ── 2. STFT→DENOISE→ISTFT (全定点, 零 float, 零除法) ── */
     {
         int read_wpos = (g_fifo_wpos - g_fifo_count + WIN_LEN + FIFO_SZ) % FIFO_SZ;
         while (g_fifo_count >= WIN_LEN) {
             g_fifo_count -= WIN_INC;
 
-            /* 2a. MATLAB stft_window: Q15×Q15 → Q15 */
+            /* 2a. Analysis: PCM Q15 × stft_window Q15 → Q15 */
             int32_t fft_in[WIN_LEN];
             int start = (read_wpos - WIN_LEN + FIFO_SZ) % FIFO_SZ;
             for (int i = 0; i < WIN_LEN; i++) {
                 int32_t v = g_fifo[(start + i) % FIFO_SZ];
-                fft_in[i] = ((int64_t)v * stft_win_q15[i] + 16384) >> 15;
+                fft_in[i] = (int32_t)(((int64_t)v * stft_win_q15[i] + 16384) >> 15);
             }
 
-            /* 2b. Q15 Forward FFT: Q15 → Q15 output */
+            /* 2b. Q15 Forward FFT → Q15 spectrum */
             int32_t fwd_r[N_BINS], fwd_i[N_BINS];
             fft_q15_forward(fft_in, fwd_r, fwd_i);
 
-            /* 2c. Q15 → float → UL-UNAS infer → Q20 CRM */
-            float spec_r[N_BINS], spec_i[N_BINS];
+            /* 2c. Q15→Q20 直接移位 (跳过 float! Q15<<5 = Q20)
+             *     ulunas_infer_frame 内部: real_q20 = round(float * 2^20)
+             *     = round(Q15/32768 * 1048576) = round(Q15 * 32) = Q15 << 5
+             */
+            int32_t real_q20[N_BINS], imag_q20[N_BINS];
             for (int j = 0; j < N_BINS; j++) {
-                spec_r[j] = (float)fwd_r[j] / 32768.0f;
-                spec_i[j] = (float)fwd_i[j] / 32768.0f;
+                real_q20[j] = fwd_r[j] << 5;
+                imag_q20[j] = fwd_i[j] << 5;
             }
-            int32_t crm[2 * N_BINS];
-            ulunas_infer_frame(spec_r, spec_i, &g_state, crm);
 
-            /* 2e. CRM Q20 → Q15 IFFT input: >>5 */
+            /* 2d. Full UL-UNAS inference (all fixed-point) */
+            int32_t x_log[N_BINS];
+            log_gen_fixed(real_q20, imag_q20, N_BINS, x_log);
+
+            int32_t x_bm[129];
+            bm_fixed(x_log, erb_erb_fc_weight, N_BINS, 129, x_bm);
+
+            int32_t e0[12*65], e1[24*33], e2[24*33], e3[32*33], e4[16*33];
+            encoder_module(x_bm, &g_state, e0, e1, e2, e3, e4);
+
+            int32_t rnn1[16*33], rnn2[16*33];
+            gdprnn_module(e4, g_state.inter_cache_0, 0, rnn1);
+            gdprnn_module(rnn1, g_state.inter_cache_1, 1, rnn2);
+
+            int32_t y_dec[1*129];
+            decoder_module(rnn2, &g_state, e0, e1, e2, e3, e4, y_dec);
+
+            uint16_t y_sig[1*129];
+            for (int j = 0; j < 129; j++)
+                y_sig[j] = sigmoid_q20_to_q15(y_dec[j]);
+
+            int16_t y_bs[N_BINS];
+            bs_fixed(y_sig, erb_ierb_fc_weight, 129, N_BINS, y_bs);
+
+            int32_t crm[2 * N_BINS];
+            mask_fixed(y_bs, real_q20, imag_q20, N_BINS, crm);
+
+            /* 2e. CRM Q20 → Q15 IFFT input */
             int32_t inv_r[N_BINS], inv_i[N_BINS];
             for (int i = 0; i < N_BINS; i++) {
                 inv_r[i] = (crm[i] + 16) >> 5;
                 inv_i[i] = (crm[N_BINS + i] + 16) >> 5;
             }
 
-            /* 2f. Q15 Inverse FFT */
+            /* 2f. Q15 Inverse FFT (no 1/N — matches KissFFT convention) */
             int32_t ifft_out[WIN_LEN];
             fft_q15_inverse(inv_r, inv_i, ifft_out);
 
-            /* 2g. Synthesis: ifft_out × window / N → Q15
-             * fft_q15_inverse has NO 1/N (matches KissFFT) but numpy IFFT DOES.
-             * >>9 compensates /N=512; >>15 for Q15×Q15→Q15; total >>24.
-             * Also accumulate window² for WOLA normalization. */
+            /* 2g. Synthesis + OLA
+             *     ifft_out (Q15×N, no 1/N) × window (Q15) >> 24 → Q15
+             *     >>9 补偿 numpy IFFT 的 1/N=1/512
+             *     >>15 补偿 Q15×Q15→Q15
+             */
             for (int i = 0; i < WIN_LEN; i++) {
                 int32_t s = (int32_t)(((int64_t)ifft_out[i] * stft_win_q15[i] + 8388608) >> 24);
                 int pos = (g_ola_pos + i) % (WIN_LEN + WIN_INC);
                 g_ola[pos] += s;
-                /* Window² Q15: win² >>15, scaled to match OLA magnitude */
-                int32_t w2 = (int32_t)(((int64_t)stft_win_q15[i] * stft_win_q15[i] + 16384) >> 15);
-                g_wola_sum[pos] += w2;
             }
 
-            /* 2h. OLA output with WOLA normalization → clamp Q15 → output FIFO */
+            /* 2h. WOLA 归一化输出 (预计算倒数表, 无除法!)
+             *     v_out = (v_ola * wola_inv[pos%%256] + 2^14) >> 15
+             *     wola_inv[i] = 2^30 / (win²[i] + win²[i+256]), Q30
+             *     结果自动在 Q15.
+             */
             for (int i = 0; i < WIN_INC; i++) {
                 int32_t v = g_ola[g_ola_pos];
-                int32_t ws = g_wola_sum[g_ola_pos];
                 g_ola[g_ola_pos] = 0;
-                g_wola_sum[g_ola_pos] = 0;
+                int idx = g_ola_pos % 256;
                 g_ola_pos = (g_ola_pos + 1) % (WIN_LEN + WIN_INC);
-                /* WOLA normalization: v = v * 32768 / ws (Q15 division) */
-                if (ws > 0) {
-                    int64_t norm = ((int64_t)v * 32768) / ws;
-                    v = (int32_t)norm;
-                }
+
+                /* WOLA normalization: multiply by precomputed inverse */
+                int64_t norm = ((int64_t)v * (int64_t)wola_inv_q30[idx] + 16384) >> 15;
+                v = (int32_t)norm;
+
+                /* Global gain calibration (adjust OUTPUT_GAIN_Q15 to match Python RMS) */
+                v = (int32_t)(((int64_t)v * OUTPUT_GAIN_Q15 + 16384) >> 15);
+
                 if (v >  32767) v =  32767;
                 if (v < -32768) v = -32768;
                 g_out_fifo[(g_out_rpos + g_out_count) % FIFO_SZ] = (int16_t)v;
@@ -174,7 +260,7 @@ void noise_reduction(short *voiceIn, short *voiceOut) {
             g_out_rpos = (g_out_rpos + 1) % FIFO_SZ;
             int32_t b = ((int32_t)g_out_fifo[g_out_rpos] * gain_q15 + 16384) >> 15;
             g_out_rpos = (g_out_rpos + 1) % FIFO_SZ;
-            int32_t out = (a + b) >> 1; /* downmix 16k→8k */
+            int32_t out = (a + b) >> 1;
             if (out >  32767) out =  32767;
             if (out < -32768) out = -32768;
             voiceOut[i] = (int16_t)out;

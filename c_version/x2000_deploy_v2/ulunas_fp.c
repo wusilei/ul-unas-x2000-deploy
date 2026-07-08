@@ -194,8 +194,7 @@ void non_gconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
                     } else {
                         x_val = x[nOut * Wout + w_src];
                     }
-                    /* weight[Cout][1][1][Kw] col-major, MATLAB transposes: kernel_chan = squeeze(weight).' */
-                    /* For Kh=1: weight[co + Cout*kw]; general: weight[co + Cout*(kh + Kh*kw)] */
+                    /* weight[Cout][1][1][Kw] col-major: weight[co + Cout*(kh + Kh*kw)] */
                     int16_t w_val = weight[nOut + Cout * (kh + Kh * kw)];
                     int64_t prod = (int64_t)x_val * w_val;
                     if (prod >= 0) acc += (prod + round_const) >> shift;
@@ -405,8 +404,8 @@ void non_gtconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
                      * So essentially we just use the transposed kernel.
                      * w_val = weight in original layout, but MATLAB transposes first
                      */
-                    /* weight[Cout][1][1][Kw] col-major: weight[co + Cout*kw] (Kh=1) */
-                    int16_t w_val = weight[nOut + Cout * kw];
+                    /* MATLAB: kernel = squeeze(weight).' → rot90(kernel,90) reverses order */
+                    int16_t w_val = weight[nOut + Cout * (Kw - 1 - kw)];
                     int64_t prod = (int64_t)x_val * w_val;
                     if (prod >= 0) pos_acc += (prod + round_const) >> shift;
                     else           pos_acc += (prod - round_const) >> shift;

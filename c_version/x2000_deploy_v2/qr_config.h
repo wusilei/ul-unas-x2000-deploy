@@ -126,8 +126,8 @@
 #define D0_CTFA_TA_GRU_QR1       (-13)
 #define D0_CTFA_TA_GRU_QR2       (-8)
 #define D0_CTFA_TA_FC_QR         (-9)   /* MATLAB: 2^(-9) */
-#define D0_CTFA_FA_GRU_QR1       (-13)
-#define D0_CTFA_FA_GRU_QR2       (-8)
+#define D0_CTFA_FA_GRU_QR1       (-12)  /* MATLAB: -12, -7 */
+#define D0_CTFA_FA_GRU_QR2       (-7)
 #define D0_CTFA_FA_FC_QR         (-9)
 
 /* ================================================================
@@ -149,8 +149,8 @@
 #define D1_CTFA_TA_GRU_QR1       (-13)
 #define D1_CTFA_TA_GRU_QR2       (-8)
 #define D1_CTFA_TA_FC_QR         (-9)   /* MATLAB: 2^(-9) */
-#define D1_CTFA_FA_GRU_QR1       (-13)
-#define D1_CTFA_FA_GRU_QR2       (-8)
+#define D1_CTFA_FA_GRU_QR1       (-12)  /* MATLAB: -12, -7 */
+#define D1_CTFA_FA_GRU_QR2       (-7)
 #define D1_CTFA_FA_FC_QR         (-9)
 
 /* ================================================================
@@ -192,8 +192,8 @@
 #define D3_CTFA_TA_GRU_QR1       (-13)
 #define D3_CTFA_TA_GRU_QR2       (-8)
 #define D3_CTFA_TA_FC_QR         (-9)   /* MATLAB: 2^(-9) */
-#define D3_CTFA_FA_GRU_QR1       (-13)
-#define D3_CTFA_FA_GRU_QR2       (-8)
+#define D3_CTFA_FA_GRU_QR1       (-11)  /* MATLAB: GRU_module(..., -11, -6) */
+#define D3_CTFA_FA_GRU_QR2       (-6)
 #define D3_CTFA_FA_FC_QR         (-9)
 
 /* ================================================================

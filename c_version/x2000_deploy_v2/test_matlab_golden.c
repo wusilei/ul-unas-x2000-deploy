@@ -1601,6 +1601,8 @@ int main(int argc, char **argv) {
                                            D3_CTFA_FA_GRU_QR1, D3_CTFA_FA_GRU_QR2, D3_CTFA_FA_FC_QR, d3_fa);
                             double snr_fa = snr_db_u16(g_d3_fa, d3_fa, 65);
                             printf("  D3.fa      : SNR=%7.2f dB  [%s]\n", snr_fa, status(snr_fa));
+                            printf("    C:"); for(int i=0;i<8;i++) printf(" %d", d3_fa[i]); printf("\n");
+                            printf("    G:"); for(int i=0;i<8;i++) printf(" %d", g_d3_fa[i]); printf("\n");
                             free(g_d3_fa);
                         }
 

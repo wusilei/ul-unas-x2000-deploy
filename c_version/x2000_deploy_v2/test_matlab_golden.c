@@ -631,17 +631,12 @@ int main(int argc, char **argv) {
                                  E1_PCONV0_CONV_QR, 24, y_pconv0_raw + 12 * 65);
 
                     /* ---- Stage 2: BN ---- */
-                    /* DEBUG: dump raw PConv0 ch0 first 5 */
-                    printf("  E1.pconv0_raw ch0: %d %d %d %d %d\n",
-                           y_pconv0_raw[0], y_pconv0_raw[1], y_pconv0_raw[2],
-                           y_pconv0_raw[3], y_pconv0_raw[4]);
                     int32_t y_bn0[24 * 65];
-                    bn_func(y_pconv0_raw, encoder_en_convs_1_pconv1_1_weight,
+                    bn_func_uw(y_pconv0_raw, encoder_en_convs_1_pconv1_1_weight,
                             encoder_en_convs_1_pconv1_1_bias,
                             encoder_en_convs_1_pconv1_1_running_mean,
                             encoder_en_convs_1_pconv1_1_running_var,
                             E1_PCONV0_BN_QR1, E1_PCONV0_BN_QR2, 24, 24 * 65, y_bn0);
-                    printf("  E1.bn0 ch0: %d %d %d\n", y_bn0[0], y_bn0[1], y_bn0[2]);
 
                     /* ---- Stage 3: AffinePReLU ---- */
                     int32_t y_ap0[24 * 65];

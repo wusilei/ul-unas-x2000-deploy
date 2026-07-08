@@ -507,9 +507,10 @@ void bn_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
  */
 void ln_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
              int Qr, int C, int N, int32_t *y) {
-    int W_spatial = N / C;  /* spatial dimension (e.g., 33 for DPRNN [33, 16]) */
+    /* Data layout: [T][C] row-major (time steps × channels).
+     * Channel stride = C (fastest-varying dimension). */
 
-    /* Compute mean in float (over all elements) */
+    /* Compute mean in float (over all elements, matching MATLAB mean(x,'all')) */
     double sum = 0.0;
     for (int i = 0; i < N; i++) {
         sum += (double)x[i];
@@ -539,7 +540,7 @@ void ln_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
     int64_t r2 = ((int64_t)1 << (shift2 - 1));
 
     for (int i = 0; i < N; i++) {
-        int c = i / W_spatial;  /* channel index for per-channel params */
+        int c = i % C;  /* channel index: [T][C] layout, C is fastest-varying */
         int64_t diff = (int64_t)x[i] - mean_q;
         int64_t norm = diff * var_q;
         int32_t x_norm;

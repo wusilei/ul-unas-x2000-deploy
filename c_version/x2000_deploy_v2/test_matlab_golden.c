@@ -1469,6 +1469,100 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                /* D3 sub-step diagnostics */
+                if (dl == 3) {
+                    /* D3: De_XMB1 — skip(e1) → PConv0(g=2,24→12) → BN → AP → Shuffle
+                     * → GTConv(2×3,s=2,12→12,33→65) → BN → AP → PConv1 → cTFA */
+                    int32_t d3_con[24 * 33];
+                    for (int i = 0; i < 24 * 33; i++)
+                        d3_con[i] = sat_i32((int64_t)d_in_rm[i] + d_skip_rm[i]);
+
+                    int32_t d3_pc[12 * 33], d3_bn[12 * 33], d3_ap[12 * 33], d3_s[12 * 33];
+                    /* PConv0 group 0: Cin=12, Cout=6 */
+                    pconv2d_func(d3_con, 12, 6, 1, 33, decoder_de_convs_3_pconv1_0_weight,
+                                 decoder_de_convs_3_pconv1_0_bias, D3_PCONV0_CONV_QR, 12, d3_pc);
+                    pconv2d_func(d3_con + 12*33, 12, 6, 1, 33, decoder_de_convs_3_pconv1_0_weight + 6,
+                                 decoder_de_convs_3_pconv1_0_bias + 6, D3_PCONV0_CONV_QR, 12, d3_pc + 6*33);
+                    bn_func(d3_pc, decoder_de_convs_3_pconv1_1_weight, decoder_de_convs_3_pconv1_1_bias,
+                            decoder_de_convs_3_pconv1_1_running_mean, decoder_de_convs_3_pconv1_1_running_var,
+                            D3_PCONV0_BN_QR1, D3_PCONV0_BN_QR2, 12, 12*33, d3_bn);
+                    affineprelu_func(d3_bn, decoder_de_convs_3_pconv1_2_affine_weight,
+                                     decoder_de_convs_3_pconv1_2_affine_bias,
+                                     decoder_de_convs_3_pconv1_2_slope_weight,
+                                     D3_PCONV0_AFFINE_QR1, D3_PCONV0_AFFINE_QR2, 12, 33, d3_ap);
+
+                    /* Check D3 PConv0 golden */
+                    snprintf(path, sizeof(path), "%s/frame0_d3_pconv0.bin", dir);
+                    int32_t *g_d3_pc = load_int32(path, 12 * 33);
+                    if (g_d3_pc) {
+                        double snr = snr_db_2d_i32(g_d3_pc, d3_ap, 12, 33);
+                        printf("  D3.pconv0  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d3_ap[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d3_pc[i]); printf("\n");
+                        free(g_d3_pc);
+                    }
+
+                    shuffle_interleave(d3_ap, 12, 33, d3_s);
+
+                    /* Check D3 Shuffle golden */
+                    snprintf(path, sizeof(path), "%s/frame0_d3_shuf.bin", dir);
+                    int32_t *g_d3_sh = load_int32(path, 12 * 33);
+                    if (g_d3_sh) {
+                        double snr = snr_db_2d_i32(g_d3_sh, d3_s, 12, 33);
+                        printf("  D3.shuf    : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        free(g_d3_sh);
+                    }
+
+                    /* GTConv: 2×3, stride=[1,2], with cache (fresh for iso test) */
+                    int32_t d3_tconv[12 * 65];
+                    {
+                        ulunas_state_t d3s_st;
+                        ulunas_state_init(&d3s_st);
+                        gtconv2d_func(d3_s, 12, 1, 65, 2, 3, 1, 2,
+                                      decoder_de_convs_3_dconv_1_weight, decoder_de_convs_3_dconv_1_bias,
+                                      D3_TCONV_CONV_QR, d3s_st.conv_cache_d1, d3_tconv);
+                    }
+                    int32_t d3_tc_bn[12*65];
+                    bn_func(d3_tconv, decoder_de_convs_3_dconv_2_weight, decoder_de_convs_3_dconv_2_bias,
+                            decoder_de_convs_3_dconv_2_running_mean, decoder_de_convs_3_dconv_2_running_var,
+                            D3_TCONV_BN_QR1, D3_TCONV_BN_QR2, 12, 12*65, d3_tc_bn);
+                    int32_t d3_tc_ap[12*65];
+                    affineprelu_func(d3_tc_bn, decoder_de_convs_3_dconv_3_affine_weight,
+                                     decoder_de_convs_3_dconv_3_affine_bias,
+                                     decoder_de_convs_3_dconv_3_slope_weight,
+                                     D3_TCONV_AFFINE_QR1, D3_TCONV_AFFINE_QR2, 12, 65, d3_tc_ap);
+
+                    /* Check D3 TConv golden */
+                    snprintf(path, sizeof(path), "%s/frame0_dec_d3_tconv.bin", dir);
+                    int32_t *g_d3_tc = load_int32(path, 12 * 65);
+                    if (g_d3_tc) {
+                        double snr = snr_db_2d_i32(g_d3_tc, d3_tc_ap, 12, 65);
+                        printf("  D3.tconv   : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d3_tc_ap[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d3_tc[i]); printf("\n");
+                        free(g_d3_tc);
+                    }
+
+                    /* D3 cTFA input (PConv1+BN) */
+                    snprintf(path, sizeof(path), "%s/frame0_dec_d3_ctfa_in.bin", dir);
+                    int32_t *g_d3_ctfa_in = load_int32(path, 12 * 65);
+                    if (g_d3_ctfa_in) {
+                        int32_t d3_pc1[12 * 65];
+                        pconv2d_func(d3_tc_ap, 6, 6, 1, 65, decoder_de_convs_3_pconv2_0_weight,
+                                     decoder_de_convs_3_pconv2_0_bias, D3_PCONV1_CONV_QR, 12, d3_pc1);
+                        pconv2d_func(d3_tc_ap + 6*65, 6, 6, 1, 65, decoder_de_convs_3_pconv2_0_weight + 6,
+                                     decoder_de_convs_3_pconv2_0_bias + 6, D3_PCONV1_CONV_QR, 12, d3_pc1 + 6*65);
+                        bn_func(d3_pc1, decoder_de_convs_3_pconv2_1_weight, decoder_de_convs_3_pconv2_1_bias,
+                                decoder_de_convs_3_pconv2_1_running_mean, decoder_de_convs_3_pconv2_1_running_var,
+                                D3_PCONV1_BN_QR1, D3_PCONV1_BN_QR2, 12, 12*65, d3_pc1);
+                        double snr = snr_db_2d_i32(g_d3_ctfa_in, d3_pc1, 12, 65);
+                        printf("  D3.ctfa_in : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                        printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", d3_pc1[i]); printf("\n");
+                        printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_d3_ctfa_in[i]); printf("\n");
+                        free(g_d3_ctfa_in);
+                    }
+                }
+
                 free(d_golden_in); free(d_in_rm); free(d_golden_skip); free(d_skip_rm);
                 free(d_golden_out); free(d_c_out);
             }

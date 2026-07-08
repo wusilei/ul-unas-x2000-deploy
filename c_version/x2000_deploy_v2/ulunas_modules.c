@@ -740,13 +740,19 @@ void inter_rnn_module(const int32_t *x, int16_t *h_cache, int gdprnn_idx, int32_
         }
     }
 
-    /* GRU on each group, per time step, with persistent h_cache */
+    /* GRU on each group, per time step.
+     * MATLAB: GRU_module(x0, nHidden, h_cache(:,1:8), ...) processes ALL 33
+     * time steps in ONE matrix multiply — each row has its OWN initial hidden
+     * state from the persistent cache. No sequential dependency within a chunk.
+     * C: load per-time-step hidden state, process independently, store back. */
     int16_t x0_gru[33 * 8], x1_gru[33 * 8];
-    int16_t h0[8], h1[8];
-    memcpy(h0, h_cache, 8 * sizeof(int16_t));
-    memcpy(h1, h_cache + 8, 8 * sizeof(int16_t));
 
     for (int t = 0; t < 33; t++) {
+        int16_t h0[8], h1[8];
+        /* Load per-time-step initial hidden state from persistent cache */
+        memcpy(h0, &h_cache[t * 8], 8 * sizeof(int16_t));
+        memcpy(h1, &h_cache[33 * 8 + t * 8], 8 * sizeof(int16_t));
+
         gru_module(&x0[t * 8], 8, 8, h0,
                    rnn1_ih_w, rnn1_ih_b, rnn1_hh_w, rnn1_hh_b,
                    DPRNN_GRU_QR1, DPRNN_GRU_QR2, &x0_gru[t * 8]);
@@ -754,11 +760,11 @@ void inter_rnn_module(const int32_t *x, int16_t *h_cache, int gdprnn_idx, int32_
         gru_module(&x1[t * 8], 8, 8, h1,
                    rnn2_ih_w, rnn2_ih_b, rnn2_hh_w, rnn2_hh_b,
                    DPRNN_GRU_QR1, DPRNN_GRU_QR2, &x1_gru[t * 8]);
-    }
 
-    /* Update persistent h_cache */
-    memcpy(h_cache, h0, 8 * sizeof(int16_t));
-    memcpy(h_cache + 8, h1, 8 * sizeof(int16_t));
+        /* Store per-time-step output hidden state back to persistent cache */
+        memcpy(&h_cache[t * 8], h0, 8 * sizeof(int16_t));
+        memcpy(&h_cache[33 * 8 + t * 8], h1, 8 * sizeof(int16_t));
+    }
 
     /* Concat */
     int16_t x_cat[33 * 16];

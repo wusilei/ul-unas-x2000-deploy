@@ -242,23 +242,20 @@ void noise_reduction(short *voiceIn, short *voiceOut) {
     }
 
     /* ── 3. 输出 8kHz PCM (16k→8k 降采样: 平均相邻对) ── */
-    if (g_out_count >= FRAME_16K) {
+    if (g_out_count >= FRAME_IN) {
         int32_t gain_q15 = 32768;
         if (g_frame_count < WARMUP_MUTE) gain_q15 = 0;
         else if (g_frame_count < WARMUP_MUTE + WARMUP_FADE)
             gain_q15 = ((g_frame_count - WARMUP_MUTE) * 32768) / WARMUP_FADE;
 
         for (int i = 0; i < FRAME_IN; i++) {
-            int32_t a = ((int32_t)g_out_fifo[g_out_rpos] * gain_q15 + 16384) >> 15;
+            int32_t out = ((int32_t)g_out_fifo[g_out_rpos] * gain_q15 + 16384) >> 15;
             g_out_rpos = (g_out_rpos + 1) % FIFO_SZ;
-            int32_t b = ((int32_t)g_out_fifo[g_out_rpos] * gain_q15 + 16384) >> 15;
-            g_out_rpos = (g_out_rpos + 1) % FIFO_SZ;
-            int32_t out = (a + b) >> 1;
             if (out >  32767) out =  32767;
             if (out < -32768) out = -32768;
             voiceOut[i] = (int16_t)out;
         }
-        g_out_count -= FRAME_16K;
+        g_out_count -= FRAME_IN;
     } else {
         memset(voiceOut, 0, FRAME_IN * sizeof(short));
     }

@@ -1015,16 +1015,21 @@ int main(int argc, char **argv) {
         gdprnn_module(e4, st.inter_cache_0, 0, r1);
         gdprnn_module(r1, st.inter_cache_1, 1, r2);
 
-        /* --- RNN1 Sub-Step Diagnostics (frame 0 only) --- */
+        /* --- RNN1 Sub-Step Diagnostics (frame 0 only, golden E4 input) --- */
         if (frame == 0) {
-            printf("\n  --- RNN1 Intra Sub-Steps ---\n");
-            /* Inline intra_rnn_module for gdprnn_idx=0 */
+            printf("\n  --- RNN1 Intra Sub-Steps (golden E4 input) ---\n");
 
-            /* Transpose: e4 is [16][33] → x_tpose[33][16] */
+            /* Load golden E4 as input (like E1 iso test) to isolate RNN bugs */
+            snprintf(path, sizeof(path), "%s/frame0_enc_e4.bin", dir);
+            int32_t *golden_e4 = load_int32(path, 16 * 33);
+            if (!golden_e4) {
+                printf("  rnn1 iso   : SKIP (no golden E4)\n");
+            } else {
+            /* Transpose: golden_e4 is [16][33] (MATLAB col-major) → x_tpose[33][16] */
             int32_t x_tpose[33 * 16];
             for (int t = 0; t < 33; t++)
                 for (int c = 0; c < 16; c++)
-                    x_tpose[t * 16 + c] = e4[c * 33 + t];
+                    x_tpose[t * 16 + c] = golden_e4[c * 33 + t];
 
             /* Check intra input */
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_in.bin", dir);
@@ -1146,7 +1151,7 @@ int main(int argc, char **argv) {
             int32_t y_intra[16 * 33];
             for (int t = 0; t < 33; t++)
                 for (int c = 0; c < 16; c++)
-                    y_intra[c * 33 + t] = sat_i32((int64_t)e4[c * 33 + t] + x_ln_i[t * 16 + c]);
+                    y_intra[c * 33 + t] = sat_i32((int64_t)golden_e4[c * 33 + t] + x_ln_i[t * 16 + c]);
 
             snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_out.bin", dir);
             int32_t *g_iout = load_int32(path, 33 * 16);
@@ -1302,7 +1307,9 @@ int main(int argc, char **argv) {
                 printf("  rnn1.inter_out : SNR=%7.2f dB  [%s]\n", snr, status(snr));
                 free(gt); free(g_eout);
             }
-        }
+            }
+            free(golden_e4);
+        } /* end RNN1 frame 0 diagnostics */
 
         snprintf(path, sizeof(path), "%s/frame%d_rnn1.bin", dir, frame);
         int32_t *gr1 = load_int32(path, 16 * 33);

@@ -813,6 +813,8 @@ int main(int argc, char **argv) {
                         if (g_e1_ta) {
                             double snr = snr_db_u16(g_e1_ta, e1_ta_sig, TA_C);
                             printf("  E1.ta      : SNR=%7.2f dB  [%s] (full module)\n", snr, status(snr));
+                            printf("    C: "); for(int i=0;i<8;i++) printf(" %d", e1_ta_sig[i]); printf("\n");
+                            printf("    G: "); for(int i=0;i<8;i++) printf(" %d", g_e1_ta[i]); printf("\n");
                             free(g_e1_ta);
                         }
                     }
@@ -1012,6 +1014,295 @@ int main(int argc, char **argv) {
         int32_t r1[16 * 33], r2[16 * 33];
         gdprnn_module(e4, st.inter_cache_0, 0, r1);
         gdprnn_module(r1, st.inter_cache_1, 1, r2);
+
+        /* --- RNN1 Sub-Step Diagnostics (frame 0 only) --- */
+        if (frame == 0) {
+            printf("\n  --- RNN1 Intra Sub-Steps ---\n");
+            /* Inline intra_rnn_module for gdprnn_idx=0 */
+
+            /* Transpose: e4 is [16][33] → x_tpose[33][16] */
+            int32_t x_tpose[33 * 16];
+            for (int t = 0; t < 33; t++)
+                for (int c = 0; c < 16; c++)
+                    x_tpose[t * 16 + c] = e4[c * 33 + t];
+
+            /* Check intra input */
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_in.bin", dir);
+            int32_t *g_intra_in = load_int32(path, 33 * 16);
+            if (g_intra_in) {
+                double snr = snr_db_i32(g_intra_in, x_tpose, 33 * 16);
+                printf("  rnn1.intra_in : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_intra_in);
+            }
+
+            /* Split into 2 groups */
+            int32_t x0[33 * 8], x1[33 * 8];
+            for (int t = 0; t < 33; t++) {
+                memcpy(&x0[t * 8], &x_tpose[t * 16], 8 * sizeof(int32_t));
+                memcpy(&x1[t * 8], &x_tpose[t * 16 + 8], 8 * sizeof(int32_t));
+            }
+
+            /* BiGRU group 0: nHidden=4, in_dim=8 */
+            int16_t x0_gru[33 * 8];
+            bigru_module(x0, 33, 4, 8,
+                         dpgrnn_0_intra_rnn_rnn1_weight_ih_l0,
+                         dpgrnn_0_intra_rnn_rnn1_bias_ih_l0,
+                         dpgrnn_0_intra_rnn_rnn1_weight_hh_l0,
+                         dpgrnn_0_intra_rnn_rnn1_bias_hh_l0,
+                         dpgrnn_0_intra_rnn_rnn1_weight_ih_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn1_bias_ih_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn1_weight_hh_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn1_bias_hh_l0_reverse,
+                         DPRNN_GRU_QR1, DPRNN_GRU_QR2, x0_gru);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_gru0.bin", dir);
+            int16_t *g_ig0 = load_int16(path, 33 * 8);
+            if (g_ig0) {
+                double snr = snr_db_i16(g_ig0, x0_gru, 33 * 8);
+                printf("  rnn1.intra_gru0: SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", x0_gru[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_ig0[i]); printf("\n");
+                free(g_ig0);
+            }
+
+            /* BiGRU group 1 */
+            int16_t x1_gru[33 * 8];
+            bigru_module(x1, 33, 4, 8,
+                         dpgrnn_0_intra_rnn_rnn2_weight_ih_l0,
+                         dpgrnn_0_intra_rnn_rnn2_bias_ih_l0,
+                         dpgrnn_0_intra_rnn_rnn2_weight_hh_l0,
+                         dpgrnn_0_intra_rnn_rnn2_bias_hh_l0,
+                         dpgrnn_0_intra_rnn_rnn2_weight_ih_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn2_bias_ih_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn2_weight_hh_l0_reverse,
+                         dpgrnn_0_intra_rnn_rnn2_bias_hh_l0_reverse,
+                         DPRNN_GRU_QR1, DPRNN_GRU_QR2, x1_gru);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_gru1.bin", dir);
+            int16_t *g_ig1 = load_int16(path, 33 * 8);
+            if (g_ig1) {
+                double snr = snr_db_i16(g_ig1, x1_gru, 33 * 8);
+                printf("  rnn1.intra_gru1: SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_ig1);
+            }
+
+            /* Concat */
+            int16_t x_cat[33 * 16];
+            for (int t = 0; t < 33; t++) {
+                memcpy(&x_cat[t * 16], &x0_gru[t * 8], 8 * sizeof(int16_t));
+                memcpy(&x_cat[t * 16 + 8], &x1_gru[t * 8], 8 * sizeof(int16_t));
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_cat.bin", dir);
+            int16_t *g_icat = load_int16(path, 33 * 16);
+            if (g_icat) {
+                double snr = snr_db_i16(g_icat, x_cat, 33 * 16);
+                printf("  rnn1.intra_cat : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_icat);
+            }
+
+            /* Intra FC */
+            int shift_fc_i = -DPRNN_INTRA_FC_QR; /* 9 */
+            int64_t r_fc_i = ((int64_t)1 << (shift_fc_i - 1));
+            int32_t x_fc_i[33 * 16];
+            for (int t = 0; t < 33; t++) {
+                for (int o = 0; o < 16; o++) {
+                    int64_t acc = 0;
+                    for (int i = 0; i < 16; i++) {
+                        int64_t prod = (int64_t)x_cat[t * 16 + i] * dpgrnn_0_intra_fc_weight[i + 16 * o];
+                        if (prod >= 0) acc += (prod + r_fc_i) >> shift_fc_i;
+                        else           acc += (prod - r_fc_i) >> shift_fc_i;
+                    }
+                    x_fc_i[t * 16 + o] = sat_i32(acc + dpgrnn_0_intra_fc_bias[o]);
+                }
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_fc.bin", dir);
+            int32_t *g_ifc = load_int32(path, 33 * 16);
+            if (g_ifc) {
+                double snr = snr_db_i32(g_ifc, x_fc_i, 33 * 16);
+                printf("  rnn1.intra_fc  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_fc_i[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_ifc[i]); printf("\n");
+                free(g_ifc);
+            }
+
+            /* Intra LN */
+            int32_t x_ln_i[33 * 16];
+            ln_func(x_fc_i, dpgrnn_0_intra_ln_weight, dpgrnn_0_intra_ln_bias,
+                    DPRNN_INTRA_LN_QR, 16, 33 * 16, x_ln_i);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_ln.bin", dir);
+            int32_t *g_iln = load_int32(path, 33 * 16);
+            if (g_iln) {
+                double snr = snr_db_i32(g_iln, x_ln_i, 33 * 16);
+                printf("  rnn1.intra_ln  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_ln_i[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_iln[i]); printf("\n");
+                free(g_iln);
+            }
+
+            /* Intra residual: y_intra = x + x_ln, output as [16][33] */
+            int32_t y_intra[16 * 33];
+            for (int t = 0; t < 33; t++)
+                for (int c = 0; c < 16; c++)
+                    y_intra[c * 33 + t] = sat_i32((int64_t)e4[c * 33 + t] + x_ln_i[t * 16 + c]);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_intra_out.bin", dir);
+            int32_t *g_iout = load_int32(path, 33 * 16);
+            if (g_iout) {
+                /* Golden is [33][16], C output is [16][33] — transpose for comparison */
+                int32_t *gt = malloc(33 * 16 * sizeof(int32_t));
+                for (int t = 0; t < 33; t++)
+                    for (int c = 0; c < 16; c++)
+                        gt[t * 16 + c] = g_iout[t * 16 + c];
+                double snr = snr_db_2d_i32(gt, y_intra, 16, 33);
+                printf("  rnn1.intra_out : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(gt); free(g_iout);
+            }
+
+            /* ================================================
+             * Inter-RNN sub-steps
+             * ================================================ */
+            printf("\n  --- RNN1 Inter Sub-Steps ---\n");
+
+            /* Transpose y_intra[16][33] → x_inter[33][16] */
+            int32_t x_inter[33 * 16];
+            for (int t = 0; t < 33; t++)
+                for (int c = 0; c < 16; c++)
+                    x_inter[t * 16 + c] = y_intra[c * 33 + t];
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_in.bin", dir);
+            int32_t *g_inter_in = load_int32(path, 33 * 16);
+            if (g_inter_in) {
+                double snr = snr_db_i32(g_inter_in, x_inter, 33 * 16);
+                printf("  rnn1.inter_in  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_inter_in);
+            }
+
+            /* Split */
+            int32_t xi0[33 * 8], xi1[33 * 8];
+            for (int t = 0; t < 33; t++) {
+                memcpy(&xi0[t * 8], &x_inter[t * 16], 8 * sizeof(int32_t));
+                memcpy(&xi1[t * 8], &x_inter[t * 16 + 8], 8 * sizeof(int32_t));
+            }
+
+            /* Inter GRU: per-time-step independent hidden states (matching MATLAB parallel) */
+            int16_t xi0_gru[33 * 8], xi1_gru[33 * 8];
+            int16_t inter_cache_diag[33 * 16];
+            memset(inter_cache_diag, 0, 33 * 16 * sizeof(int16_t));
+            for (int t = 0; t < 33; t++) {
+                int16_t h0[8], h1[8];
+                memcpy(h0, &inter_cache_diag[t * 8], 8 * sizeof(int16_t));
+                memcpy(h1, &inter_cache_diag[33 * 8 + t * 8], 8 * sizeof(int16_t));
+                gru_module(&xi0[t * 8], 8, 8, h0,
+                           dpgrnn_0_inter_rnn_rnn1_weight_ih_l0,
+                           dpgrnn_0_inter_rnn_rnn1_bias_ih_l0,
+                           dpgrnn_0_inter_rnn_rnn1_weight_hh_l0,
+                           dpgrnn_0_inter_rnn_rnn1_bias_hh_l0,
+                           DPRNN_GRU_QR1, DPRNN_GRU_QR2, &xi0_gru[t * 8]);
+                gru_module(&xi1[t * 8], 8, 8, h1,
+                           dpgrnn_0_inter_rnn_rnn2_weight_ih_l0,
+                           dpgrnn_0_inter_rnn_rnn2_bias_ih_l0,
+                           dpgrnn_0_inter_rnn_rnn2_weight_hh_l0,
+                           dpgrnn_0_inter_rnn_rnn2_bias_hh_l0,
+                           DPRNN_GRU_QR1, DPRNN_GRU_QR2, &xi1_gru[t * 8]);
+                memcpy(&inter_cache_diag[t * 8], h0, 8 * sizeof(int16_t));
+                memcpy(&inter_cache_diag[33 * 8 + t * 8], h1, 8 * sizeof(int16_t));
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_gru0.bin", dir);
+            int16_t *g_eg0 = load_int16(path, 33 * 8);
+            if (g_eg0) {
+                double snr = snr_db_i16(g_eg0, xi0_gru, 33 * 8);
+                printf("  rnn1.inter_gru0: SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %6d", xi0_gru[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %6d", g_eg0[i]); printf("\n");
+                free(g_eg0);
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_gru1.bin", dir);
+            int16_t *g_eg1 = load_int16(path, 33 * 8);
+            if (g_eg1) {
+                double snr = snr_db_i16(g_eg1, xi1_gru, 33 * 8);
+                printf("  rnn1.inter_gru1: SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_eg1);
+            }
+
+            /* Inter Concat */
+            int16_t xi_cat[33 * 16];
+            for (int t = 0; t < 33; t++) {
+                memcpy(&xi_cat[t * 16], &xi0_gru[t * 8], 8 * sizeof(int16_t));
+                memcpy(&xi_cat[t * 16 + 8], &xi1_gru[t * 8], 8 * sizeof(int16_t));
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_cat.bin", dir);
+            int16_t *g_ecat = load_int16(path, 33 * 16);
+            if (g_ecat) {
+                double snr = snr_db_i16(g_ecat, xi_cat, 33 * 16);
+                printf("  rnn1.inter_cat : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(g_ecat);
+            }
+
+            /* Inter FC */
+            int shift_fc_e = -DPRNN_INTER_FC_QR; /* 9 */
+            int64_t r_fc_e = ((int64_t)1 << (shift_fc_e - 1));
+            int32_t x_fc_e[33 * 16];
+            for (int t = 0; t < 33; t++) {
+                for (int o = 0; o < 16; o++) {
+                    int64_t acc = 0;
+                    for (int i = 0; i < 16; i++) {
+                        int64_t prod = (int64_t)xi_cat[t * 16 + i] * dpgrnn_0_inter_fc_weight[i + 16 * o];
+                        if (prod >= 0) acc += (prod + r_fc_e) >> shift_fc_e;
+                        else           acc += (prod - r_fc_e) >> shift_fc_e;
+                    }
+                    x_fc_e[t * 16 + o] = sat_i32(acc + dpgrnn_0_inter_fc_bias[o]);
+                }
+            }
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_fc.bin", dir);
+            int32_t *g_efc = load_int32(path, 33 * 16);
+            if (g_efc) {
+                double snr = snr_db_i32(g_efc, x_fc_e, 33 * 16);
+                printf("  rnn1.inter_fc  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_fc_e[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_efc[i]); printf("\n");
+                free(g_efc);
+            }
+
+            /* Inter LN */
+            int32_t x_ln_e[33 * 16];
+            ln_func(x_fc_e, dpgrnn_0_inter_ln_weight, dpgrnn_0_inter_ln_bias,
+                    DPRNN_INTER_LN_QR, 16, 33 * 16, x_ln_e);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_ln.bin", dir);
+            int32_t *g_eln = load_int32(path, 33 * 16);
+            if (g_eln) {
+                double snr = snr_db_i32(g_eln, x_ln_e, 33 * 16);
+                printf("  rnn1.inter_ln  : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                printf("    [0..7] C:"); for(int i=0;i<8;i++) printf(" %d", x_ln_e[i]); printf("\n");
+                printf("    [0..7] G:"); for(int i=0;i<8;i++) printf(" %d", g_eln[i]); printf("\n");
+                free(g_eln);
+            }
+
+            /* Inter residual → output as [16][33] */
+            int32_t y_inter[16 * 33];
+            for (int t = 0; t < 33; t++)
+                for (int c = 0; c < 16; c++)
+                    y_inter[c * 33 + t] = sat_i32((int64_t)y_intra[c * 33 + t] + x_ln_e[t * 16 + c]);
+
+            snprintf(path, sizeof(path), "%s/frame0_rnn1_inter_out.bin", dir);
+            int32_t *g_eout = load_int32(path, 33 * 16);
+            if (g_eout) {
+                int32_t *gt = malloc(33 * 16 * sizeof(int32_t));
+                for (int t = 0; t < 33; t++)
+                    for (int c = 0; c < 16; c++)
+                        gt[t * 16 + c] = g_eout[t * 16 + c];
+                double snr = snr_db_2d_i32(gt, y_inter, 16, 33);
+                printf("  rnn1.inter_out : SNR=%7.2f dB  [%s]\n", snr, status(snr));
+                free(gt); free(g_eout);
+            }
+        }
 
         snprintf(path, sizeof(path), "%s/frame%d_rnn1.bin", dir, frame);
         int32_t *gr1 = load_int32(path, 16 * 33);

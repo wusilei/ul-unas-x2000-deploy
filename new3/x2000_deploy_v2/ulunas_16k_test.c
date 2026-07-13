@@ -1,0 +1,153 @@
+/**
+ * ulunas_16k_test.c — 16kHz Native Denoise Test (no resampling)
+ * Reads 16kHz raw PCM from stdin, writes 16kHz enhanced PCM to stdout.
+ * Matches model training sample rate exactly.
+ */
+#include "ulunas_fp.h"
+#include "ulunas_lut.h"
+#include "qr_config.h"
+#include "layer_dims.h"
+#include "ulunas_matlab_weights.h"
+#include "fft_q15.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define N_FFT       512
+#define WIN_LEN     512
+#define WIN_INC     256
+#define N_BINS      257
+#define FRAME_IN    400      /* 25ms @ 16kHz */
+#define FIFO_SZ     2048
+#define WARMUP_MUTE 5
+#define WARMUP_FADE 3
+#define OUTPUT_GAIN_Q15 32768
+
+#include "fft_q15.h"
+
+static const int16_t stft_win_q15[512] = {
+    0,1,5,11,20,31,44,60,79,100,123,149,177,208,241,277,315,355,398,443,491,541,593,648,705,765,827,891,958,1027,1098,1171,1247,1325,1406,1488,1573,1660,1749,1841,1935,2030,2128,2229,2331,2435,2542,2650,2761,2874,2989,3105,3224,3345,3468,3592,3719,3847,3978,4110,4244,4380,4518,4657,4799,4942,5086,5233,5381,5531,5682,5835,5990,6146,6304,6463,6624,6786,6950,7115,7281,7449,7618,7789,7961,8134,8308,8484,8660,8838,9017,9197,9379,9561,9744,9929,10114,10300,10487,10675,10864,11054,11244,11436,11628,11820,12014,12208,12403,12598,12794,12990,13187,13385,13583,13781,13980,14179,14378,14578,14778,14978,15178,15379,15580,15780,15981,16182,16384,16585,16786,16987,17187,17388,17589,17789,17989,18189,18389,18588,18787,18986,19184,19382,19580,19777,19973,20169,20364,20559,20753,20947,21139,21331,21523,21713,21903,22092,22280,22467,22653,22838,23023,23206,23388,23570,23750,23929,24107,24283,24459,24633,24806,24978,25149,25318,25486,25652,25817,25981,26143,26304,26463,26621,26777,26932,27085,27236,27386,27534,27681,27825,27968,28110,28249,28387,28523,28657,28789,28920,29048,29175,29299,29422,29543,29662,29778,29893,30006,30117,30225,30332,30436,30538,30639,30737,30832,30926,31018,31107,31194,31279,31361,31442,31520,31596,31669,31740,31809,31876,31940,32002,32062,32119,32174,32226,32276,32324,32369,32412,32452,32490,32526,32559,32590,32618,32644,32667,32688,32707,32723,32736,32747,32756,32762,32766,32767,32766,32762,32756,32747,32736,32723,32707,32688,32667,32644,32618,32590,32559,32526,32490,32452,32412,32369,32324,32276,32226,32174,32119,32062,32002,31940,31876,31809,31740,31669,31596,31520,31442,31361,31279,31194,31107,31018,30926,30832,30737,30639,30538,30436,30332,30225,30117,30006,29893,29778,29662,29543,29422,29299,29175,29048,28920,28789,28657,28523,28387,28249,28110,27968,27825,27681,27534,27386,27236,27085,26932,26777,26621,26463,26304,26143,25981,25817,25652,25486,25318,25149,24978,24806,24633,24459,24283,24107,23929,23750,23570,23388,23206,23023,22838,22653,22467,22280,22092,21903,21713,21523,21331,21139,20947,20753,20559,20364,20169,19973,19777,19580,19382,19184,18986,18787,18588,18389,18189,17989,17789,17589,17388,17187,16987,16786,16585,16384,16182,15981,15780,15580,15379,15178,14978,14778,14578,14378,14179,13980,13781,13583,13385,13187,12990,12794,12598,12403,12208,12014,11820,11628,11436,11244,11054,10864,10675,10487,10300,10114,9929,9744,9561,9379,9197,9017,8838,8660,8484,8308,8134,7961,7789,7618,7449,7281,7115,6950,6786,6624,6463,6304,6146,5990,5835,5682,5531,5381,5233,5086,4942,4799,4657,4518,4380,4244,4110,3978,3847,3719,3592,3468,3345,3224,3105,2989,2874,2761,2650,2542,2435,2331,2229,2128,2030,1935,1841,1749,1660,1573,1488,1406,1325,1247,1171,1098,1027,958,891,827,765,705,648,593,541,491,443,398,355,315,277,241,208,177,149,123,100,79,60,44,31,20,11,5,1
+};
+
+static const uint32_t wola_inv_q30[256] = {
+    32768u,32770u,32778u,32790u,32807u,32830u,32857u,32889u,32927u,32968u,33016u,33067u,33125u,33187u,33254u,33326u,33404u,33486u,33573u,33667u,33765u,33868u,33976u,34090u,34210u,34333u,34463u,34599u,34739u,34886u,35037u,35194u,35358u,35525u,35700u,35879u,36064u,36255u,36452u,36655u,36864u,37078u,37300u,37525u,37757u,37996u,38241u,38492u,38748u,39011u,39279u,39556u,39836u,40125u,40416u,40717u,41023u,41334u,41653u,41977u,42308u,42644u,42988u,43336u,43691u,44051u,44417u,44788u,45166u,45548u,45937u,46332u,46729u,47133u,47540u,47954u,48371u,48793u,49218u,49646u,50079u,50512u,50953u,51392u,51837u,52281u,52725u,53171u,53620u,54068u,54516u,54962u,55407u,55851u,56291u,56731u,57163u,57595u,58018u,58441u,58858u,59264u,59666u,60059u,60445u,60818u,61182u,61540u,61880u,62213u,62532u,62840u,63135u,63411u,63678u,63925u,64158u,64373u,64570u,64750u,64910u,65056u,65182u,65293u,65376u,65448u,65496u,65528u,65536u,65528u,65496u,65448u,65376u,65293u,65182u,65056u,64910u,64750u,64570u,64373u,64158u,63925u,63678u,63411u,63135u,62840u,62532u,62213u,61880u,61540u,61182u,60818u,60445u,60059u,59666u,59264u,58858u,58441u,58018u,57595u,57163u,56731u,56291u,55851u,55407u,54962u,54516u,54068u,53620u,53171u,52725u,52281u,51837u,51392u,50953u,50512u,50079u,49646u,49218u,48793u,48371u,47954u,47540u,47133u,46729u,46332u,45937u,45548u,45166u,44788u,44417u,44051u,43691u,43336u,42988u,42644u,42308u,41977u,41653u,41334u,41023u,40717u,40416u,40125u,39836u,39556u,39279u,39011u,38748u,38492u,38241u,37996u,37757u,37525u,37300u,37078u,36864u,36655u,36452u,36255u,36064u,35879u,35700u,35525u,35358u,35194u,35037u,34886u,34739u,34599u,34463u,34333u,34210u,34090u,33976u,33868u,33765u,33667u,33573u,33486u,33404u,33326u,33254u,33187u,33125u,33067u,33016u,32968u,32927u,32889u,32857u,32830u,32807u,32790u,32778u,32770u
+};
+
+static ulunas_state_t g_state;
+static int16_t g_fifo[FIFO_SZ];
+static int g_fifo_wpos, g_fifo_count;
+static int32_t g_ola[WIN_LEN + WIN_INC];
+static int g_ola_pos;
+static int16_t g_out_fifo[FIFO_SZ];
+static int g_out_rpos, g_out_count;
+static int g_frame_count;
+
+int main(int argc, char **argv) {
+    ulunas_state_init(&g_state);
+    g_fifo_wpos = g_fifo_count = 0; g_ola_pos = 0;
+    g_out_rpos = g_out_count = 0; g_frame_count = 0;
+    memset(g_fifo, 0, sizeof(g_fifo)); memset(g_ola, 0, sizeof(g_ola));
+    memset(g_out_fifo, 0, sizeof(g_out_fifo));
+
+    fprintf(stderr, "UL-UNAS v7 16kHz native test\n");
+    short in[FRAME_IN], out[FRAME_IN];
+    int fid = 0;
+
+    while (fread(in, sizeof(short), FRAME_IN, stdin) == FRAME_IN) {
+        /* Feed 16kHz PCM into FIFO */
+        for (int i = 0; i < FRAME_IN; i++) {
+            g_fifo[g_fifo_wpos] = in[i];
+            g_fifo_wpos = (g_fifo_wpos + 1) % FIFO_SZ;
+            g_fifo_count++;
+        }
+
+        /* Process STFT frames */
+        int read_wpos = (g_fifo_wpos - g_fifo_count + FIFO_SZ) % FIFO_SZ;
+        while (g_fifo_count >= WIN_LEN) {
+            g_fifo_count -= WIN_INC;
+
+            /* Window + FFT */
+            int32_t fft_in[WIN_LEN];
+            int start = (read_wpos - WIN_LEN + FIFO_SZ) % FIFO_SZ;
+            for (int i = 0; i < WIN_LEN; i++) {
+                int32_t v = g_fifo[(start + i) % FIFO_SZ];
+                fft_in[i] = (int32_t)(((int64_t)v * stft_win_q15[i] + 16384) >> 15);
+            }
+
+            int32_t fwd_r[N_BINS], fwd_i[N_BINS];
+            fft_q15_forward(fft_in, fwd_r, fwd_i);
+
+            /* Q15→Q20 */
+            int32_t real_q20[N_BINS], imag_q20[N_BINS];
+            for (int j = 0; j < N_BINS; j++) { real_q20[j] = fwd_r[j] << 5; imag_q20[j] = fwd_i[j] << 5; }
+
+            /* Model inference */
+            int32_t x_log[N_BINS]; log_gen_fixed(real_q20, imag_q20, N_BINS, x_log);
+            int32_t x_bm[129]; bm_fixed(x_log, erb_erb_fc_weight, N_BINS, 129, x_bm);
+            int32_t e0[12*65], e1[24*33], e2[24*33], e3[32*33], e4[16*33];
+            encoder_module(x_bm, &g_state, e0, e1, e2, e3, e4);
+            int32_t rnn1[16*33], rnn2[16*33];
+            gdprnn_module(e4, g_state.inter_cache_0, 0, rnn1);
+            gdprnn_module(rnn1, g_state.inter_cache_1, 1, rnn2);
+            int32_t y_dec[1*129];
+            decoder_module(rnn2, &g_state, e0, e1, e2, e3, e4, y_dec);
+            uint16_t y_sig[1*129];
+            for (int j = 0; j < 129; j++) y_sig[j] = sigmoid_q20_to_q15(y_dec[j]);
+            int16_t y_bs[N_BINS];
+            bs_fixed(y_sig, erb_ierb_fc_weight, 129, N_BINS, y_bs);
+            int32_t crm[2*N_BINS];
+            mask_fixed(y_bs, real_q20, imag_q20, N_BINS, crm);
+
+            /* Q20→Q15 + IFFT */
+            int32_t inv_r[N_BINS], inv_i[N_BINS];
+            for (int i = 0; i < N_BINS; i++) { inv_r[i] = (crm[i]+16)>>5; inv_i[i] = (crm[N_BINS+i]+16)>>5; }
+            int32_t ifft_out[WIN_LEN];
+            fft_q15_inverse(inv_r, inv_i, ifft_out);
+
+            /* OLA */
+            for (int i = 0; i < WIN_LEN; i++) {
+                int32_t s = (int32_t)(((int64_t)ifft_out[i] * stft_win_q15[i] + 8388608) >> 24);
+                int pos = (g_ola_pos + i) % (WIN_LEN + WIN_INC);
+                g_ola[pos] += s;
+            }
+
+            /* WOLA output */
+            for (int i = 0; i < WIN_INC; i++) {
+                int32_t v = g_ola[g_ola_pos]; g_ola[g_ola_pos] = 0;
+                int idx = g_ola_pos % 256;
+                g_ola_pos = (g_ola_pos + 1) % (WIN_LEN + WIN_INC);
+                int64_t norm = ((int64_t)v * (int64_t)wola_inv_q30[idx] + 16384) >> 15;
+                v = (int32_t)(((int64_t)norm * OUTPUT_GAIN_Q15 + 16384) >> 15);
+                if (v > 32767) v = 32767; if (v < -32768) v = -32768;
+                g_out_fifo[(g_out_rpos + g_out_count) % FIFO_SZ] = (int16_t)v;
+                g_out_count++;
+            }
+            g_frame_count++;
+            read_wpos = (read_wpos + WIN_INC) % FIFO_SZ;
+        }
+
+        /* Output 16kHz PCM */
+        if (g_out_count >= FRAME_IN) {
+            int32_t gain = 32768;
+            if (g_frame_count < WARMUP_MUTE) gain = 0;
+            else if (g_frame_count < WARMUP_MUTE+WARMUP_FADE)
+                gain = ((g_frame_count-WARMUP_MUTE)*32768)/WARMUP_FADE;
+            for (int i = 0; i < FRAME_IN; i++) {
+                int32_t o = ((int32_t)g_out_fifo[g_out_rpos] * gain + 16384) >> 15;
+                g_out_rpos = (g_out_rpos+1) % FIFO_SZ;
+                if (o > 32767) o = 32767; if (o < -32768) o = -32768;
+                out[i] = (int16_t)o;
+            }
+            g_out_count -= FRAME_IN;
+            fwrite(out, sizeof(short), FRAME_IN, stdout);
+            fflush(stdout);
+        } else {
+            memset(out, 0, FRAME_IN * sizeof(short));
+            fwrite(out, sizeof(short), FRAME_IN, stdout);
+            fflush(stdout);
+        }
+        fid++;
+    }
+    fprintf(stderr, "Done: %d frames\n", fid);
+    return 0;
+}

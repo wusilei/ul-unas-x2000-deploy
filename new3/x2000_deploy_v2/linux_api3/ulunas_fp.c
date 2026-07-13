@@ -1,0 +1,1202 @@
+/**
+ * ulunas_fp.c — UL-UNAS Fixed-Point Operator Library
+ * ===================================================
+ * All operators match MATLAB source 1:1 in computation order,
+ * quantization rules, and truncation timing.
+ *
+ * Key principle: first round+shift each multiply, then accumulate.
+ *   MATLAB: temp = round(x_kernel .* kernel_chan * 2^Qr);
+ *           conv_result = sum(temp, 'all');
+ *   C:      for each: prod = x * w; rounded = round_shr(prod, -Qr); acc += rounded;
+ */
+
+#include "ulunas_fp.h"
+#include "ulunas_lut.h"
+#include "qr_config.h"
+#include "layer_dims.h"
+#include <math.h>  /* for LN float computation only */
+
+/* ================================================================
+ * Initialization
+ * ================================================================ */
+void ulunas_state_init(ulunas_state_t *st) {
+    memset(st, 0, sizeof(ulunas_state_t));
+}
+
+/* ================================================================
+ * conv2d_func — Standard 2D Convolution
+ * ================================================================
+ * MATLAB:
+ *   for each output position (h_id, w_id):
+ *       x_kernel = extract patch from padded input
+ *       temp = round(x_kernel .* kernel_chan * 2^Qr)
+ *       conv_result(h_id, w_id) = sum(temp, 'all')
+ *   y_chan = sum over input channels + bias
+ */
+void conv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
+                 int Kh, int Kw, int stride_h, int stride_w,
+                 const int16_t *weight, const int32_t *bias, int Qr,
+                 int32_t *y) {
+    int shift = -Qr;  /* Qr is negative → right shift */
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+
+    /* NOTE: Conv2D currently uses simplified 2D indexing.
+     * For encoder TConv: input x_c is [Cin, Hx=Kh, Wx] with [cache; current].
+     * pad_w = (Kw-1)/2 = 1 for Kw=3; pad_h = 0 (valid conv on H).
+     * Hx = (Hout-1)*stride_h + Kh, Wx = (Wout-1)*stride_w + Kw - 2*pad_w
+     */
+    int pad_w = (Kw - 1) / 2;
+    int Wx = (Wout - 1) * stride_w + Kw - 2 * pad_w;
+    int Hx = (Hout - 1) * stride_h + Kh;  /* valid conv on time dimension */
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        for (int h = 0; h < Hout; h++) {
+            for (int w = 0; w < Wout; w++) {
+                int64_t acc = 0;
+                for (int nIn = 0; nIn < Cin; nIn++) {
+                    for (int kh = 0; kh < Kh; kh++) {
+                        int h_src = h * stride_h + kh;
+                        for (int kw = 0; kw < Kw; kw++) {
+                            int w_src = w * stride_w + kw - pad_w;
+                            int32_t x_val;
+                            if (h_src < 0 || h_src >= Hx || w_src < 0 || w_src >= Wx) {
+                                x_val = 0;
+                            } else {
+                                x_val = x[(nIn * Hx + h_src) * Wx + w_src];
+                            }
+                            /* weight[Cout][Cin][Kh][Kw] col-major: co + Cout*(ci + Cin*(kh + Kh*kw)) */
+                            int16_t w_val = weight[nOut + Cout * (nIn + Cin * (kh + Kh * kw))];
+                            int64_t prod = (int64_t)x_val * w_val;
+                            int32_t rounded;
+                            if (prod >= 0) rounded = (int32_t)((prod + round_const) >> shift);
+                            else           rounded = (int32_t)((prod - round_const) >> shift);
+                            acc += rounded;
+                        }
+                    }
+                }
+                /* Output: y[nOut][h][w] → y[nOut * Wout + w] when Hout=1 */
+                y[(nOut * Hout + h) * Wout + w] = sat_i32(acc + bias[nOut]);
+            }
+        }
+    }
+}
+
+/* ================================================================
+ * pconv2d_func — Point-wise (1×1) Convolution
+ * ================================================================
+ * MATLAB: conv_result = round(x_chan * kernel_chan * 2^Qr)
+ * Each output channel: sum over input channels
+ */
+void pconv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
+                  const int16_t *weight, const int32_t *bias, int Qr,
+                  int weight_stride,
+                  int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    (void)Hout;  /* Hout=1 always */
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        for (int w = 0; w < Wout; w++) {
+            int64_t acc = 0;
+            for (int nIn = 0; nIn < Cin; nIn++) {
+                int32_t x_val = x[nIn * Wout + w];
+                /* weight[total_Cout][Cin] col-major: weight[co + stride*ci] */
+                int16_t w_val = weight[nOut + weight_stride * nIn];
+                int64_t prod = (int64_t)x_val * w_val;
+                if (prod >= 0) acc += (int32_t)((prod + round_const) >> shift);
+                else           acc += (int32_t)((prod - round_const) >> shift);
+            }
+            y[nOut * Wout + w] = sat_i32(acc + bias[nOut]);
+        }
+    }
+}
+
+/* ================================================================
+ * gconv2d_func — Grouped Temporal Convolution (with cache)
+ * ================================================================
+ * Input = [cache; x] concatenated along time dimension (H)
+ * Each output channel independent (Cin=1 per group)
+ * Pad: left/right = 2 zeros
+ * After processing: cache = x (store current frame as next cache)
+ */
+void gconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
+                  int Kh, int Kw, int stride_h, int stride_w,
+                  const int16_t *weight, const int32_t *bias, int Qr,
+                  int32_t *cache, int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    int cache_h = Kh - 1;  /* cache rows (e.g., 1 for 2×3 kernel) */
+    /* cache_w = actual width of cached input frames (Wx, not Wout) */
+    int pad_w = (Kw - 1) / 2;
+    int Wx = (Wout - 1) * stride_w + Kw - 2 * pad_w;  /* input width */
+    int cache_w = Wx;  /* cache same width as input */
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        for (int w = 0; w < Wout; w++) {
+            int64_t acc = 0;
+            /* Process over H dimension: cache row + current x row */
+            for (int kh = 0; kh < Kh; kh++) {
+                int h_src;
+                if (kh < cache_h) {
+                    h_src = kh;  /* cache row */
+                } else {
+                    h_src = kh;  /* current x row (replaces cache row index) */
+                }
+                for (int kw = 0; kw < Kw; kw++) {
+                    int w_src = w * stride_w + kw - ((Kw - 1) / 2); /* center pad */
+                    int32_t x_val;
+                    if (w_src < 0 || w_src >= cache_w) {
+                        x_val = 0;
+                    } else {
+                        if (kh < cache_h)
+                            x_val = cache[nOut * cache_w + w_src]; /* FIXED: cache is [Cout][W] */
+                        else
+                            x_val = x[nOut * Wx + w_src];
+                    }
+                    /* weight[Cout][1][Kh][Kw] col-major: co + Cout*(0 + 1*(kh + Kh*kw)) */
+                    int16_t w_val = weight[nOut + Cout * (kh + Kh * kw)];
+                    int64_t prod = (int64_t)x_val * w_val;
+                    if (prod >= 0) acc += (prod + round_const) >> shift;
+                    else           acc += (prod - round_const) >> shift;
+                }
+            }
+            y[nOut * Wout + w] = sat_i32(acc + bias[nOut]);
+        }
+    }
+    /* Update cache: copy x to cache */
+    memcpy(cache, x, Cout * Wx * sizeof(int32_t));
+}
+
+/* ================================================================
+ * non_gconv2d_func — Grouped Non-Temporal Convolution (no cache)
+ * ================================================================
+ * 1×5 kernel along frequency dimension
+ * Pad: left/right = 2 zeros
+ * No cache update
+ */
+void non_gconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
+                      int Kh, int Kw, int stride_h, int stride_w,
+                      const int16_t *weight, const int32_t *bias, int Qr,
+                      int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    (void)Hout; (void)stride_h;
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        for (int w = 0; w < Wout; w++) {
+            int64_t acc = 0;
+            for (int kh = 0; kh < Kh; kh++) {
+                for (int kw = 0; kw < Kw; kw++) {
+                    int w_src = w * stride_w + kw - ((Kw - 1) / 2); /* pad = 2 for Kw=5 */
+                    int32_t x_val;
+                    if (w_src < 0 || w_src >= Wout) {
+                        x_val = 0;
+                    } else {
+                        x_val = x[nOut * Wout + w_src];
+                    }
+                    /* weight[Cout][1][1][Kw] col-major: weight[co + Cout*(kh + Kh*kw)] */
+                    int16_t w_val = weight[nOut + Cout * (kh + Kh * kw)];
+                    int64_t prod = (int64_t)x_val * w_val;
+                    if (prod >= 0) acc += (prod + round_const) >> shift;
+                    else           acc += (prod - round_const) >> shift;
+                }
+            }
+            y[nOut * Wout + w] = sat_i32(acc + bias[nOut]);
+        }
+    }
+}
+
+/* ================================================================
+ * tconv2d_func — Transposed 2D Convolution
+ * ================================================================
+ * Zero-insertion: x_insert(1:stride:end, 1:stride:end) = x_chan
+ * Kernel rotated 180°: rot90(kernel, 2)
+ * Then standard conv sliding
+ * weight[Cin][Cout][Kh][Kw]  (note: Cin/Cout swapped vs standard conv)
+ */
+void tconv2d_func(const int32_t *x, int Cin, int Cout, int Hout, int Wout,
+                  int Kh, int Kw, int stride_h, int stride_w,
+                  const int16_t *weight, const int32_t *bias, int Qr,
+                  int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    (void)Hout;
+
+    /* x shape: [Cin][Hx][Wx] (3D) */
+    /* Hx = total rows including cache. For De_XConv: 3 rows (2 cache + 1 current) */
+    /* Wx = input width, derived from output: Wout = (Wx-1)*stride_w + Kw - 2*pad + 1 */
+    /* For pad=(Kw-1)/2: Wout = (Wx-1)*stride_w + 1 → Wx = (Wout-1)/stride_w + 1 */
+    int Hx = Kh;  /* rows from cache concatenation */
+    int Wx = (Wout - 1) / stride_w + 1;
+
+    memset(y, 0, Cout * Wout * sizeof(int32_t));
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        int64_t chan_acc[129];  /* max Wout=129 */
+        memset(chan_acc, 0, Wout * sizeof(int64_t));
+
+        for (int nIn = 0; nIn < Cin; nIn++) {
+            /* Zero-insertion: create upsampled input */
+            int H_insert = (Hx - 1) * stride_h + 1;
+            int W_insert = (Wx - 1) * stride_w + 1;
+            int32_t x_insert[3 * 129];  /* max H_insert*W_insert = 3*129=387 for De_XConv */
+            memset(x_insert, 0, H_insert * W_insert * sizeof(int32_t));
+
+            for (int hi = 0; hi < Hx; hi++) {
+                for (int wi = 0; wi < Wx; wi++) {
+                    x_insert[hi * W_insert + wi * stride_w] = x[(nIn * Hx + hi) * Wx + wi];
+                }
+            }
+
+            /* Pad left/right = (Kh-1)/2 = 1 for 3×3 */
+            int pad = (Kw - 1) / 2;
+
+            for (int w = 0; w < Wout; w++) {
+                int64_t pos_acc = 0;
+                for (int kh = 0; kh < Kh; kh++) {
+                    for (int kw = 0; kw < Kw; kw++) {
+                        int w_src = w + kw - pad;
+                        int32_t x_val;
+                        if (w_src < 0 || w_src >= W_insert || kh >= H_insert) {
+                            x_val = 0;
+                        } else {
+                            x_val = x_insert[kh * W_insert + w_src];
+                        }
+                        /* weight[Cin][Cout][Kh][Kw] col-major: nIn + Cin*(nOut + Cout*(kh + Kh*kw)) */
+                        /* rot90(kernel, 2) → 180° rotation on (kh,kw) */
+                        int16_t w_val = weight[nIn + Cin * (nOut + Cout * ((Kh - 1 - kh) + Kh * (Kw - 1 - kw)))];
+                        int64_t prod = (int64_t)x_val * w_val;
+                        if (prod >= 0) pos_acc += (prod + round_const) >> shift;
+                        else           pos_acc += (prod - round_const) >> shift;
+                    }
+                }
+                chan_acc[w] += pos_acc;
+            }
+        }
+
+        for (int w = 0; w < Wout; w++) {
+            y[nOut * Wout + w] = sat_i32(chan_acc[w] + bias[nOut]);
+        }
+    }
+}
+
+/* ================================================================
+ * gtconv2d_func — Grouped Transposed Temporal Conv
+ * ================================================================
+ * Input = [cache; x] concatenated, then zero-insertion
+ * Kernel: rot90(kernel, 2) — 180° rotation
+ * Cache updated: cache = x
+ */
+void gtconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
+                   int Kh, int Kw, int stride_h, int stride_w,
+                   const int16_t *weight, const int32_t *bias, int Qr,
+                   int32_t *cache, int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    (void)Hout;
+    int cache_h = Kh - 1;  /* cache rows */
+    int Wx = (Wout - 1) / stride_w + 1;  /* input width (before zero-insertion) */
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        int64_t chan_acc[129];  /* max Wout */
+        memset(chan_acc, 0, Wout * sizeof(int64_t));
+
+        /* Build concatenated input: [cache; x] */
+        int H_total = Kh;  /* cache_h + 1 */
+        int32_t x_cat[2 * 129];  /* [2][129] max */
+        for (int hi = 0; hi < cache_h; hi++) {
+            memcpy(&x_cat[hi * Wx], &cache[nOut * Wx + hi * Wx], Wx * sizeof(int32_t)); /* FIXED */
+        }
+        memcpy(&x_cat[cache_h * Wx], &x[nOut * Wx], Wx * sizeof(int32_t));
+
+        /* Zero-insertion */
+        int H_insert = H_total * stride_h;
+        int W_insert = Wx * stride_w;
+        int32_t x_insert[4 * 258];  /* max buffer */
+        memset(x_insert, 0, H_insert * W_insert * sizeof(int32_t));
+        for (int hi = 0; hi < H_total; hi++) {
+            for (int wi = 0; wi < Wx; wi++) {
+                x_insert[(hi * stride_h) * W_insert + wi * stride_w] = x_cat[hi * Wx + wi];
+            }
+        }
+
+        int pad = (Kw - 1) / 2;
+        for (int w = 0; w < Wout; w++) {
+            int64_t pos_acc = 0;
+            for (int kh = 0; kh < Kh; kh++) {
+                for (int kw = 0; kw < Kw; kw++) {
+                    int h_src = kh;  /* no offset since stride handles it */
+                    int w_src = w + kw - pad;
+                    int32_t x_val;
+                    if (w_src < 0 || w_src >= W_insert || h_src >= H_insert) {
+                        x_val = 0;
+                    } else {
+                        x_val = x_insert[h_src * W_insert + w_src];
+                    }
+                    /* weight[Cout][1][Kh][Kw] col-major, rot90(kernel, 2): 180° rotation */
+                    int16_t w_val = weight[nOut + Cout * ((Kh - 1 - kh) + Kh * (Kw - 1 - kw))];
+                    int64_t prod = (int64_t)x_val * w_val;
+                    if (prod >= 0) pos_acc += (prod + round_const) >> shift;
+                    else           pos_acc += (prod - round_const) >> shift;
+                }
+            }
+            chan_acc[w] += pos_acc;
+        }
+
+        for (int w = 0; w < Wout; w++) {
+            y[nOut * Wout + w] = sat_i32(chan_acc[w] + bias[nOut]);
+        }
+    }
+
+    /* Update cache */
+    memcpy(cache, x, Cout * Wx * sizeof(int32_t));
+}
+
+/* ================================================================
+ * non_gtconv2d_func — Grouped Non-Temporal Transposed Conv
+ * ================================================================
+ * Zero-insertion + kernel rot90(kernel, 90) — 90° rotation
+ * No cache
+ */
+void non_gtconv2d_func(const int32_t *x, int Cout, int Hout, int Wout,
+                       int Kh, int Kw, int stride_h, int stride_w,
+                       const int16_t *weight, const int32_t *bias, int Qr,
+                       int32_t *y) {
+    int shift = -Qr;
+    int64_t round_const = ((int64_t)1 << (shift - 1));
+    (void)Hout; (void)stride_h;
+
+    for (int nOut = 0; nOut < Cout; nOut++) {
+        int64_t chan_acc[129];  /* max Wout=129... actually max is 65? */
+        memset(chan_acc, 0, Wout * sizeof(int64_t));
+
+        /* Zero-insertion along W dimension only */
+        /* Wout = (Wx_in-1)*stride_w + 1 (for pad=(Kw-1)/2) → Wx_in = (Wout-1)/stride_w + 1 */
+        int Wx_in = (Wout - 1) / stride_w + 1;
+        int W_insert = (Wx_in - 1) * stride_w + 1;
+        int32_t x_insert[258];
+        memset(x_insert, 0, W_insert * sizeof(int32_t));
+        for (int wi = 0; wi < Wx_in; wi++) {
+            x_insert[wi * stride_w] = x[nOut * Wx_in + wi];
+        }
+
+        int pad = (Kw - 1) / 2;  /* pad = 2 for Kw=5 */
+        for (int w = 0; w < Wout; w++) {
+            int64_t pos_acc = 0;
+            for (int kh = 0; kh < Kh; kh++) {  /* Kh=1 for 1×5 */
+                for (int kw = 0; kw < Kw; kw++) {
+                    int w_src = w + kw - pad;
+                    int32_t x_val;
+                    if (w_src < 0 || w_src >= W_insert) {
+                        x_val = 0;
+                    } else {
+                        x_val = x_insert[w_src];
+                    }
+                    /* weight[Cout][1][1][Kw], rot90(kernel, 90)
+                     * rot90 for 1×5: original [a b c d e] → rot90 → [a;b;c;d;e] (column)
+                     * Actually rot90(matrix, 90): for 1×5 row → 5×1 column
+                     * So we need to re-interpret: kernel_chan is transposed
+                     * weight = squeeze(weight).' then rot90(..., 90)
+                     * For 1×5: squeeze → [1,5], .' → [5,1], rot90 → same as [5,1]
+                     * Actually rot90 of a column doesn't change it. Let me re-read MATLAB:
+                     * kernel = squeeze(weight(nOut,1,:,:)).';  % → [Kw, Kh] = [5, 1]
+                     * kernel_chan = rot90(kernel, 90);  % rot90 of 5×1 → 5×1 (no change for column)
+                     * So essentially we just use the transposed kernel.
+                     * w_val = weight in original layout, but MATLAB transposes first
+                     */
+                    /* MATLAB: kernel = squeeze(weight).' → rot90(kernel,90) reverses order */
+                    int16_t w_val = weight[nOut + Cout * (Kw - 1 - kw)];
+                    int64_t prod = (int64_t)x_val * w_val;
+                    if (prod >= 0) pos_acc += (prod + round_const) >> shift;
+                    else           pos_acc += (prod - round_const) >> shift;
+                }
+            }
+            chan_acc[w] += pos_acc;
+        }
+
+        for (int w = 0; w < Wout; w++) {
+            y[nOut * Wout + w] = sat_i32(chan_acc[w] + bias[nOut]);
+        }
+    }
+}
+
+/* ================================================================
+ * bn_func — Batch Normalization
+ * ================================================================
+ * MATLAB:
+ *   x_norm = round((x - running_mean) .* running_var * 2^Qr1)
+ *   y = round(x_norm .* weight * 2^Qr2) + bias
+ *
+ * x, running_mean, bias: int32_t (Q20)
+ * running_var: uint16_t (Q11-Q14, varies per block)
+ * weight: int16_t (Q14) — signed version
+ */
+void bn_func_sw(const int32_t *x, const int16_t *weight, const int32_t *bias,
+                const int32_t *running_mean, const uint16_t *running_var,
+                int Qr1, int Qr2, int C, int N, int32_t *y) {
+    int shift1 = -Qr1;
+    int shift2 = -Qr2;
+    int64_t r1 = ((int64_t)1 << (shift1 - 1));
+    int64_t r2 = ((int64_t)1 << (shift2 - 1));
+    int W = N / C;  /* spatial width per channel */
+
+    for (int i = 0; i < N; i++) {
+        int c = i / W;  /* channel index for BN params */
+        int64_t diff = (int64_t)x[i] - running_mean[c];
+        int64_t norm = diff * (int64_t)running_var[c];
+        int32_t x_norm;
+        if (norm >= 0) x_norm = (int32_t)((norm + r1) >> shift1);
+        else           x_norm = (int32_t)((norm - r1) >> shift1);
+
+        int64_t scaled = (int64_t)x_norm * weight[c];
+        int32_t y_scaled;
+        if (scaled >= 0) y_scaled = (int32_t)((scaled + r2) >> shift2);
+        else             y_scaled = (int32_t)((scaled - r2) >> shift2);
+
+        y[i] = sat_i32((int64_t)y_scaled + bias[c]);
+    }
+}
+
+/* bn_func with unsigned weight (uint16_t) */
+void bn_func_uw(const int32_t *x, const uint16_t *weight, const int32_t *bias,
+                const int32_t *running_mean, const uint16_t *running_var,
+                int Qr1, int Qr2, int C, int N, int32_t *y) {
+    int shift1 = -Qr1;
+    int shift2 = -Qr2;
+    int64_t r1 = ((int64_t)1 << (shift1 - 1));
+    int64_t r2 = ((int64_t)1 << (shift2 - 1));
+    int W = N / C;
+
+    for (int i = 0; i < N; i++) {
+        int c = i / W;
+        int64_t diff = (int64_t)x[i] - running_mean[c];
+        int64_t norm = diff * (int64_t)running_var[c];
+        int32_t x_norm;
+        if (norm >= 0) x_norm = (int32_t)((norm + r1) >> shift1);
+        else           x_norm = (int32_t)((norm - r1) >> shift1);
+
+        int64_t scaled = (int64_t)x_norm * weight[c];
+        int32_t y_scaled;
+        if (scaled >= 0) y_scaled = (int32_t)((scaled + r2) >> shift2);
+        else             y_scaled = (int32_t)((scaled - r2) >> shift2);
+
+        y[i] = sat_i32((int64_t)y_scaled + bias[c]);
+    }
+}
+
+/* Default bn_func — use signed weight path (most common) */
+void bn_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
+             const int32_t *running_mean, const uint16_t *running_var,
+             int Qr1, int Qr2, int C, int N, int32_t *y) {
+    bn_func_sw(x, weight, bias, running_mean, running_var, Qr1, Qr2, C, N, y);
+}
+
+/* ================================================================
+ * ln_func — Layer Normalization
+ * ================================================================
+ * MATLAB:
+ *   x_dq = x * 2^(-20)  (dequant to float)
+ *   running_mean = mean(x_dq), running_var = 1/sqrt(var(x_dq) + 1e-8)
+ *   running_mean = Fix_point(mean, 's32f20')
+ *   running_var = Fix_point(1/sqrt(var), 'u16f11')
+ *   x_norm = round((x - mean) * var * 2^(-11))
+ *   y = round(x_norm * weight * 2^Qr) + bias
+ *
+ * We use float for mean/var computation (matching MATLAB dequant).
+ */
+void ln_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
+             int Qr, int C, int N, int32_t *y) {
+    /* Data layout: [T][C] row-major (time steps × channels).
+     * Channel stride = C (fastest-varying dimension). */
+
+    /* X2000-safe: integer statistics + sqrt_q40_to_q20, no float */
+    int64_t sum = 0;
+    for (int i = 0; i < N; i++) sum += x[i];
+    int32_t mean_q = (int32_t)(sum / N);
+
+    int64_t var_sum_q40 = 0;
+    for (int i = 0; i < N; i++) {
+        int64_t diff = (int64_t)x[i] - mean_q;
+        var_sum_q40 += diff * diff;
+    }
+    int64_t var_q40 = var_sum_q40 / N;
+
+    uint16_t var_q;
+    if (var_q40 <= 0) {
+        var_q = 65535;
+    } else {
+        uint32_t std_q20 = sqrt_q40_to_q20((uint64_t)var_q40);
+        uint32_t inv_q11 = (std_q20 > 0) ? (uint32_t)((1ULL << 31) / std_q20) : 65535;
+        var_q = (inv_q11 > 65535) ? 65535 : (uint16_t)inv_q11;
+    }
+    if (var_q == 0) var_q = 1;  /* avoid zero */
+
+    /* Normalize: x_norm = round((x - mean) * var * 2^(-11)) */
+    int shift1 = 11;
+    int64_t r1 = ((int64_t)1 << (shift1 - 1));
+
+    /* Scale/shift: y = round(x_norm * weight * 2^Qr) + bias */
+    int shift2 = -Qr;
+    int64_t r2 = ((int64_t)1 << (shift2 - 1));
+
+    for (int i = 0; i < N; i++) {
+        int c = i % C;  /* channel index: [T][C] layout, C is fastest-varying */
+        int64_t diff = (int64_t)x[i] - mean_q;
+        int64_t norm = diff * var_q;
+        int32_t x_norm;
+        if (norm >= 0) x_norm = (int32_t)((norm + r1) >> shift1);
+        else           x_norm = (int32_t)((norm - r1) >> shift1);
+
+        int64_t scaled = (int64_t)x_norm * weight[c];
+        int32_t y_scaled;
+        if (scaled >= 0) y_scaled = (int32_t)((scaled + r2) >> shift2);
+        else             y_scaled = (int32_t)((scaled - r2) >> shift2);
+
+        y[i] = sat_i32((int64_t)y_scaled + bias[c]);
+    }
+}
+
+/* ================================================================
+ * affineprelu_func — Affine PReLU
+ * ================================================================
+ * MATLAB:
+ *   x_copy = x;
+ *   index = x < 0;  [row, ~] = find(index);
+ *   x(index) = round(x(index) .* slope(row) * 2^Qr1);
+ *   y = round(x_copy .* weight * 2^Qr2) + bias + x;  (x is now partially modified!)
+ *
+ * Note: The order matters! x gets modified in-place for negative values,
+ * then the affine transformation uses the ORIGINAL x_copy but the residual
+ * adds back the MODIFIED x. Re-reading the MATLAB:
+ *   y = round(x_copy .* weight * 2^Qr2) + bias + x;
+ * So x_copy is the original, x is modified (negatives got PReLU).
+ * The final `+ x` adds the PReLU-modified version as residual.
+ */
+void affineprelu_func(const int32_t *x, const int16_t *weight, const int32_t *bias,
+                      const int16_t *slope, int Qr1, int Qr2,
+                      int C, int W, int32_t *y) {
+    int shift1 = -Qr1;
+    int shift2 = -Qr2;
+    int64_t r1 = ((int64_t)1 << (shift1 - 1));
+    int64_t r2 = ((int64_t)1 << (shift2 - 1));
+    int N = C * W;
+
+    /* Process each element.
+     * weight/bias are [C,W] stored column-major: weight[c + C*w], bias[c + C*w] */
+    for (int i = 0; i < N; i++) {
+        int32_t x_orig = x[i];
+        int32_t x_mod = x_orig;
+        int c = i / W;
+        int w = i % W;
+        int cm_idx = c + C * w;  /* column-major linear index for [C,W] */
+
+        /* PReLU: negative part gets multiplied by slope (per-channel, 1D) */
+        if (x_orig < 0) {
+            int64_t prod = (int64_t)x_orig * slope[c];
+            if (prod >= 0) x_mod = (int32_t)((prod + r1) >> shift1);
+            else           x_mod = (int32_t)((prod - r1) >> shift1);
+        }
+
+        /* Affine: round(x_copy * weight * 2^Qr2) — weight is [C,W] col-major */
+        int64_t aff = (int64_t)x_orig * weight[cm_idx];
+        int32_t aff_rounded;
+        if (aff >= 0) aff_rounded = (int32_t)((aff + r2) >> shift2);
+        else          aff_rounded = (int32_t)((aff - r2) >> shift2);
+
+        /* y = affine + bias + x_mod (residual) — bias is [C,W] col-major */
+        y[i] = sat_i32((int64_t)aff_rounded + bias[cm_idx] + x_mod);
+    }
+}
+
+/* ================================================================
+ * gru_module — Single-Direction GRU
+ * ================================================================
+ * MATLAB steps (matching GRU_module.m exactly):
+ *
+ * 1. Reset gate:  r_t = round(x_t*ih_r_w*2^Qr1) + round(h*hh_r_w*2^Qr2) + bias
+ *                 → sigmoid → u16f15
+ * 2. Update gate: z_t = round(x_t*ih_z_w*2^Qr1) + round(h*hh_z_w*2^Qr2) + bias
+ *                 → sigmoid → u16f15
+ * 3. Candidate:   h_t = round(h*hh_n_w*2^Qr2) + hh_n_b
+ *                 n_t = round(x_t*ih_n_w*2^Qr1) + round(r_t.*h_t*2^(-15)) + ih_n_b
+ *                 → tanh → s16f15
+ * 4. Update:      h = round((32768-z_t).*n_t*2^(-15)) + round(z_t.*h*2^(-15))
+ *
+ * Input:
+ *   x_t[in_dim] in Q20 (int32_t)
+ *   h_cache[nHidden] in Q15 (int16_t), updated in-place
+ *   ih_weight[in_dim][3*nHidden] in Q12 (int16_t)
+ *   ih_bias[3*nHidden] in Q10 (int32_t storage — actually s16f10, but stored as int32_t)
+ *   hh_weight[nHidden][3*nHidden] in Q12 (int16_t)
+ *   hh_bias[3*nHidden] in Q10
+ *
+ * Qr1 = -13 (ih path): round(x*w >> 13)
+ * Qr2 = -8  (hh path): round(h*w >> 8)
+ */
+void gru_module(const int32_t *x_t, int nHidden, int in_dim,
+                int16_t *h_cache,
+                const int16_t *ih_weight, const int32_t *ih_bias,
+                const int16_t *hh_weight, const int32_t *hh_bias,
+                int Qr1, int Qr2,
+                int16_t *y) {
+    int shift1 = -Qr1;  /* 13 */
+    int shift2 = -Qr2;  /* 8 */
+    int64_t r1 = ((int64_t)1 << (shift1 - 1));
+    int64_t r2 = ((int64_t)1 << (shift2 - 1));
+
+    /* Temporary buffers for gates */
+    int32_t r_t_q20[16];  /* max nHidden=32, use dynamic? Use stack VLA or fixed */
+    int32_t z_t_q20[16];
+    int32_t n_t_q20[16];
+    /* Actually nHidden can be up to 64 (TA GRU) or 8 (Inter RNN).
+     * Use a fixed max of 64. */
+    int32_t r_buf[64], z_buf[64], n_buf[64], h_t_buf[64];
+
+    /* --- Reset gate R --- */
+    for (int j = 0; j < nHidden; j++) {
+        /* MATLAB: round(Σ x_t[i]*w[i] * 2^Qr) — sum first, then round */
+        int64_t sum_ih = 0, sum_hh = 0;
+
+        /* ih path: sum in Q32, then round */
+        for (int i = 0; i < in_dim; i++) {
+            int16_t w = ih_weight[i + in_dim * j];
+            sum_ih += (int64_t)x_t[i] * w;
+        }
+
+        /* hh path: sum in Q27, then round */
+        for (int i = 0; i < nHidden; i++) {
+            int16_t w = hh_weight[i + nHidden * j];
+            sum_hh += (int64_t)h_cache[i] * w;
+        }
+
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
+
+        /* Bias: ih_r_bias[j] + hh_r_bias[j] — both stored as int32_t (Q10 → scaled to Q20) */
+        /* Actually bias is in s16f10 range but stored as int32_t. The MATLAB does:
+         * r_t = round(x*ih_w*2^Qr1) + round(h*hh_w*2^Qr2) + ih_r_b + hh_r_b
+         * The bias values are in Q10, but they're added directly to Q20 accumulators.
+         * Wait - looking at MATLAB: bias is used directly as loaded from .mat.
+         * The bias is s16f10, meaning it's 1/1024 of Q20. In C, the bias arrays are int32_t
+         * but the values are actually Q10-scaled (stored as int32_t for convenience).
+         * Actually looking at extract_weights.m: GRU bias → 's32f20'
+         * Wait no - the prompt says GRU bias is s16f10, so the C arrays should have Q10 values.
+         * But extract_weights.m stores them as int32_t with Q20 scale.
+         * Let me check: the MATLAB says ih_r_bias = ih_bias(1:nHidden).
+         * When loaded from .mat, the bias values are in whatever Q format they were stored.
+         * If they're s16f10, they need to be scaled up to Q20 before adding.
+         * Actually looking at extract_weights.m:
+         *   if contains(name, 'bias') && (contains(name, 'gru') || contains(name, 'rnn'))
+         *       q_fmt = 's32f20'; return;
+         * So GRU biases are exported as int32_t Q20! That means they're already scaled to Q20.
+         * But the prompt says GRU bias is s16f10...
+         * Let me trust the extract_weights.m behavior: GRU bias → s32f20.
+         * The bias values from .mat files include the Q10→Q20 conversion.
+         * Actually wait - extract_weights.m does q_int32(data, 20) which scales by 2^20.
+         * If the original .mat data is already integer (within int16 range), it just casts.
+         * So the bias values in C are the raw integer values from the .mat files.
+         * In MATLAB: load('bias.mat') gives a value already in Q10 representation.
+         * Then: round(x*w*2^Qr) gives Q20, and bias (Q10) is added directly...
+         * Actually looking more carefully at MATLAB GRU: the bias is loaded from .mat,
+         * and the Q format it's stored in is Q10. But MATLAB does:
+         *   r_t = round(x_t*ih_r_weight*2^(Qr1)) + round(h_cache*hh_r_weight*2^(Qr2)) + ih_r_bias + hh_r_bias;
+         * x_t is Q20, ih_r_weight is Q12 → x_t*ih_r_weight is Q32 → right shift 13 → Q19? No...
+         * Wait: x_t (Q20) * ih_w (Q12) = Q32 product. round(prod * 2^(-13)) means right-shift by 13.
+         * Q32 >> 13 = Q19. bias (Q10) << 9 would match Q19... but MATLAB adds bias directly.
+         *
+         * This is getting complicated. The key insight: MATLAB stores bias values as they come
+         * from training/quantization. If extract_weights stores them as int32_t Q20, then
+         * they were scaled by 2^20. But the actual GRU computation in MATLAB adds them directly
+         * without further scaling. So we need to match the MATLAB behavior.
+         *
+         * Let me think about this differently:
+         * In MATLAB: r_t = round(x*ih_w*2^(-13)) + round(h*hh_w*2^(-8)) + ih_b + hh_b
+         * x is s32f20, ih_w is the loaded weight (pre-quantized to int16 range).
+         * ih_b is the loaded bias value.
+         *
+         * The loaded bias value in .mat is the fixed-point bias. If stored as s16f10,
+         * the raw integer is bias_q10. In C, extract_weights.m detects integer values
+         * and casts to int32_t directly. So bias[i] in C = bias_q10 (0-1023 or small values).
+         *
+         * For the addition to work in C:
+         * r_t (Q20 from round+shift) + bias (Q10 raw) — this doesn't align.
+         * But MATLAB does this exact addition. The bias values are small enough that
+         * the mismatch is tiny? Or the bias is actually in Q20 already in the .mat?
+         *
+         * Let me re-read extract_weights.m: it does q_int32(data, 20).
+         *   data = double(s.(name));  % loaded from .mat
+         * If data values are integers in [-32768, 32767], it just casts to int32_t.
+         * So the C bias values are the raw int values from .mat files.
+         * In MATLAB, these same raw values are loaded and used directly.
+         * So the bias values in both MATLAB and C are identical raw integers.
+         * The effective Q format doesn't matter — what matters is that the raw integer
+         * values are the same in both MATLAB and C, and they're added at the same point.
+         * The round() results from x*w paths produce Q20-ish values (large),
+         * while bias values are small (Q10-ish). MATLAB just adds them.
+         *
+         * So in C: just add the raw bias values directly, same as MATLAB.
+         */
+        acc += ih_bias[j] + hh_bias[j];
+        r_buf[j] = sat_i32(acc);
+    }
+
+    /* Sigmoid on reset gate */
+    for (int j = 0; j < nHidden; j++) {
+        /* r_buf[j] is in Q20 → sigmoid LUT → u16f15 */
+        /* Actually wait: the GRU computation produces values that are in Q20 range
+         * (x*w is large). The sigmoid takes float input. In MATLAB:
+         *   r_t_dq = r_t * 2^(-20);  → dequant
+         *   r_t_dq = sigmoid_func(r_t_dq);  → float sigmoid
+         *   r_t = Fix_point(r_t_dq, 'u16f15');  → requantize to Q15
+         * So r_buf IS in Q20 and we pass it to sigmoid_q20_to_q15 which handles Q20→Q15.
+         */
+    }
+
+    /* --- Update gate Z --- */
+    for (int j = 0; j < nHidden; j++) {
+        int64_t sum_ih = 0, sum_hh = 0;
+        for (int i = 0; i < in_dim; i++) {
+            int16_t w = ih_weight[i + in_dim * (nHidden + j)];  /* ih_z */
+            sum_ih += (int64_t)x_t[i] * w;
+        }
+        for (int i = 0; i < nHidden; i++) {
+            int16_t w = hh_weight[i + nHidden * (nHidden + j)];  /* hh_z */
+            sum_hh += (int64_t)h_cache[i] * w;
+        }
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
+        acc += ih_bias[nHidden + j] + hh_bias[nHidden + j];
+        z_buf[j] = sat_i32(acc);
+    }
+
+    /* --- Candidate hidden state N --- */
+    /* h_t = round(h * hh_n_w * 2^Qr2) + hh_n_b */
+    for (int j = 0; j < nHidden; j++) {
+        int64_t sum_hh = 0;
+        for (int i = 0; i < nHidden; i++) {
+            int16_t w = hh_weight[i + nHidden * (2 * nHidden + j)];  /* hh_n */
+            sum_hh += (int64_t)h_cache[i] * w;
+        }
+        int64_t acc = 0;
+        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2;
+        else             acc += (sum_hh - r2) >> shift2;
+        acc += hh_bias[2 * nHidden + j];
+        h_t_buf[j] = sat_i32(acc);
+    }
+
+    /* n_t = round(x_t * ih_n_w * 2^Qr1) + round(r_t .* h_t * 2^(-15)) + ih_n_b */
+    for (int j = 0; j < nHidden; j++) {
+        int64_t sum_ih = 0;
+        for (int i = 0; i < in_dim; i++) {
+            int16_t w = ih_weight[i + in_dim * (2 * nHidden + j)];  /* ih_n */
+            sum_ih += (int64_t)x_t[i] * w;
+        }
+        int64_t acc = 0;
+        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1;
+        else             acc += (sum_ih - r1) >> shift1;
+        /* r_t .* h_t * 2^(-15): both are Q20? No, r_t becomes Q15 after sigmoid...
+         * Actually, r_t stays Q20 before sigmoid. After sigmoid r_t is Q15.
+         * h_t_buf is Q20 (from hh path).
+         * r_t(Q15) * h_t(Q20) = Q35. round( * 2^(-15)) = Q20.
+         *
+         * Wait, let me re-read MATLAB:
+         * r_t = round(x*ih_r_w*2^Qr1) + ...  → Q20 value (before sigmoid)
+         * r_t_dq = r_t * 2^(-20)  → float
+         * r_t = sigmoid(r_t_dq) → float
+         * r_t = Fix_point(r_t, 'u16f15')  → Q15
+         *
+         * Then: n_t = ... + round(r_t .* h_t * 2^(-15)) + ih_n_b
+         * r_t is Q15, h_t is Q20. r_t .* h_t = Q35. round(*2^(-15)) = Q20.
+         *
+         * In C: we still have r_buf[j] in Q20 (before sigmoid), need to sigmoid it first.
+         */
+        /* Apply sigmoid to r_buf[j] first */
+        uint16_t r_q15 = sigmoid_q20_to_q15(r_buf[j]);
+        int64_t prod_gate = (int64_t)r_q15 * h_t_buf[j];
+        int32_t gate_contrib;
+        if (prod_gate >= 0) gate_contrib = (int32_t)((prod_gate + 16384) >> 15);  /* 2^14 = 16384 */
+        else                gate_contrib = (int32_t)((prod_gate - 16384) >> 15);
+        acc += gate_contrib;
+        acc += ih_bias[2 * nHidden + j];
+        n_buf[j] = sat_i32(acc);
+    }
+
+    /* --- Hidden state update --- */
+    /* h = round((32768 - z_t) .* n_t * 2^(-15)) + round(z_t .* h_cache * 2^(-15)) */
+    for (int j = 0; j < nHidden; j++) {
+        uint16_t z_q15 = sigmoid_q20_to_q15(z_buf[j]);
+        int16_t n_q15 = tanh_q20_to_q15(n_buf[j]);
+
+        /* (32768 - z_t) .* n_t * 2^(-15) */
+        int32_t one_minus_z = 32768 - (int32_t)z_q15;
+        int64_t term1 = (int64_t)one_minus_z * n_q15;
+        int32_t t1;
+        if (term1 >= 0) t1 = (int32_t)((term1 + 16384) >> 15);
+        else            t1 = (int32_t)((term1 - 16384) >> 15);
+
+        /* z_t .* h_cache * 2^(-15) */
+        int64_t term2 = (int64_t)z_q15 * h_cache[j];
+        int32_t t2;
+        if (term2 >= 0) t2 = (int32_t)((term2 + 16384) >> 15);
+        else            t2 = (int32_t)((term2 - 16384) >> 15);
+
+        h_cache[j] = clamp_i16(t1 + t2);
+        y[j] = h_cache[j];
+    }
+}
+
+/* ================================================================
+ * bigru_module — Bidirectional GRU
+ * ================================================================
+ * Forward: t=0..T-1 with h_cache=0 initially
+ * Backward: t=T-1..0 with h_cache_re=0 initially, then flip output
+ * y = cat(2, y_forward, y_backward_flipped)
+ */
+void bigru_module(const int32_t *x, int T, int nHidden, int in_dim,
+                  const int16_t *ih_weight, const int32_t *ih_bias,
+                  const int16_t *hh_weight, const int32_t *hh_bias,
+                  const int16_t *re_ih_weight, const int32_t *re_ih_bias,
+                  const int16_t *re_hh_weight, const int32_t *re_hh_bias,
+                  int Qr1, int Qr2,
+                  int16_t *y) {
+    int16_t h_fwd[32] = {0};  /* forward hidden state, max nHidden */
+    int16_t h_rev[32] = {0};  /* reverse hidden state */
+    int16_t *y_rev = (int16_t *)malloc(T * nHidden * sizeof(int16_t));
+
+    /* Forward pass */
+    for (int t = 0; t < T; t++) {
+        gru_module(&x[t * in_dim], nHidden, in_dim, h_fwd,
+                   ih_weight, ih_bias, hh_weight, hh_bias, Qr1, Qr2,
+                   &y[t * (2 * nHidden)]);
+    }
+
+    /* Reverse pass: process from end to start */
+    for (int t = 0; t < T; t++) {
+        int t_rev = T - 1 - t;
+        gru_module(&x[t_rev * in_dim], nHidden, in_dim, h_rev,
+                   re_ih_weight, re_ih_bias, re_hh_weight, re_hh_bias, Qr1, Qr2,
+                   &y_rev[t * nHidden]);
+    }
+
+    /* Concat: y_forward already in y[:, 0:nHidden], y_rev flipped → y[:, nHidden:2*nHidden] */
+    for (int t = 0; t < T; t++) {
+        for (int j = 0; j < nHidden; j++) {
+            y[t * (2 * nHidden) + nHidden + j] = y_rev[(T - 1 - t) * nHidden + j];
+        }
+    }
+
+    free(y_rev);
+}
+
+/* ================================================================
+ * ctfa_ta_module — Channel-wise Time Attention
+ * ================================================================
+ * MATLAB:
+ *   x_dq = x * 2^(-20); x_squared = x_dq.^2;
+ *   x_agg = mean(x_squared, 2);  % average over frequency
+ *   x_t = Fix_point(x_agg', 'u32f20');
+ *   [x_gru, h_cache] = GRU_module(x_t, nHidden, ...);
+ *   x_fc = round(x_gru * fc_weight * 2^fc_Qr) + fc_bias;
+ *   → sigmoid → u16f15
+ */
+void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
+                    int16_t *h_cache,
+                    const int16_t *ih_weight, const int32_t *ih_bias,
+                    const int16_t *hh_weight, const int32_t *hh_bias,
+                    const int16_t *fc_weight, const int32_t *fc_bias,
+                    int Qr1, int Qr2, int fc_Qr,
+                    uint16_t *y) {
+    /* Step 1: Square + average over frequency → [C] */
+    /* Use float intermediate (matching MATLAB dequant) or int64 */
+    int32_t x_agg[32];  /* max C for TA: E3 has 64, use larger... */
+    /* Actually max TA input C: E3 has 32 channels. E0 has 12. */
+    int32_t x_agg_buf[128];  /* safe max */
+
+    for (int c = 0; c < C; c++) {
+        int64_t sum_sq = 0;
+        for (int w = 0; w < W; w++) {
+            int32_t val = x[c * W + w];
+            sum_sq += (int64_t)val * val;
+        }
+        /* sum_sq is Q40, need to: dequant to float, sqrt, square, mean.
+         * Actually in MATLAB:
+         * x_dq = x * 2^(-20)  → float
+         * x_squared = x_dq.^2  → float^2
+         * x_agg = mean(x_squared, 2) → average over W
+         * x_agg is float, then Fix_point(x_agg', 'u32f20') → Q20
+         *
+         * In C: sum_sq is Q40. mean over W: sum_sq / W. But we need to scale.
+         * x_dq = x / 2^20. x_dq^2 = x^2 / 2^40.
+         * mean(x_dq^2) = sum(x^2) / (W * 2^40).
+         * Fix_point to Q20: round(mean * 2^20) = round(sum(x^2) / (W * 2^20)).
+         * So: x_agg_q20 = round(sum_sq / (W * 2^20)).
+         */
+        int64_t denom = (int64_t)W * 1048576LL;  /* W * 2^20 */
+        int64_t half = denom / 2;
+        if (sum_sq >= 0) x_agg_buf[c] = (int32_t)((sum_sq + half) / denom);
+        else             x_agg_buf[c] = (int32_t)((sum_sq - half) / denom);
+        if (x_agg_buf[c] < 0) x_agg_buf[c] = 0;  /* u32f20, clamp to unsigned */
+    }
+
+    /* Step 2: GRU (x_agg is 1×C, treated as single time step) */
+    int16_t x_gru[64];  /* GRU output in Q15, max nHidden=64 (E3/D0) */
+    /* GRU_module expects x_t[in_dim], where in_dim = C */
+    /* But GRU_module treats input as [in_dim] array in Q20 */
+    /* x_agg_buf is in Q20 already, use as input */
+    gru_module(x_agg_buf, nHidden, C, h_cache,
+               ih_weight, ih_bias, hh_weight, hh_bias, Qr1, Qr2, x_gru);
+
+    /* Step 3: FC + sigmoid */
+    int shift_fc = -fc_Qr;  /* fc_Qr = -8 → shift=8 */
+    int64_t r_fc = ((int64_t)1 << (shift_fc - 1));
+
+    for (int c = 0; c < C; c++) {
+        int64_t acc = 0;
+        for (int j = 0; j < nHidden; j++) {
+            /* fc_weight[nHidden][C] col-major: fc_weight[j + nHidden*c] */
+            int64_t prod = (int64_t)x_gru[j] * fc_weight[j + nHidden * c];
+            if (prod >= 0) acc += (prod + r_fc) >> shift_fc;
+            else           acc += (prod - r_fc) >> shift_fc;
+        }
+        int32_t fc_out = sat_i32(acc + fc_bias[c]);
+        y[c] = sigmoid_q20_to_q15(fc_out);
+    }
+}
+
+/* ================================================================
+ * ctfa_fa_module — Channel-wise Frequency Attention
+ * ================================================================
+ * MATLAB:
+ *   x_dq = x*2^(-20); x_squared = x_dq.^2;
+ *   x_agg = mean(x_squared, 1);  % average over channels
+ *   x_agg = Fix_point(x_agg, 'u32f20');
+ *   pad → reshape → BiGRU(nHidden=4) → FC → reshape → de-pad → sigmoid
+ */
+void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
+                    int group, int seg, int pad_len,
+                    const int16_t *ih_weight, const int32_t *ih_bias,
+                    const int16_t *hh_weight, const int32_t *hh_bias,
+                    const int16_t *re_ih_weight, const int32_t *re_ih_bias,
+                    const int16_t *re_hh_weight, const int32_t *re_hh_bias,
+                    const int16_t *fc_weight, const int32_t *fc_bias,
+                    int Qr1, int Qr2, int fc_Qr,
+                    uint16_t *y) {
+    /* Step 1: Square + mean over channels → [W] */
+    int32_t x_agg[260];  /* max W+pad */
+    for (int w = 0; w < W; w++) {
+        int64_t sum_sq = 0;
+        for (int c = 0; c < C; c++) {
+            int32_t val = x[c * W + w];
+            sum_sq += (int64_t)val * val;
+        }
+        int64_t denom = (int64_t)C * 1048576LL;
+        int64_t half = denom / 2;
+        if (sum_sq >= 0) x_agg[w] = (int32_t)((sum_sq + half) / denom);
+        else             x_agg[w] = (int32_t)((sum_sq - half) / denom);
+        if (x_agg[w] < 0) x_agg[w] = 0;
+    }
+
+    /* Pad with zeros */
+    int W_padded = W + pad_len;
+    int32_t x_pad[260];
+    memcpy(x_pad, x_agg, W * sizeof(int32_t));
+    memset(x_pad + W, 0, pad_len * sizeof(int32_t));
+
+    /* Reshape to [seg][group]: MATLAB x_t = reshape(x_pad, [group, seg])'
+     * Column-major reshape: [group×seg] filled as x_pad[g + group*s]
+     * Then transpose: x_t[s][g] = x_pad[g + group*s] */
+    int32_t x_reshaped[68 * 4];  /* [seg][group] */
+    for (int s = 0; s < seg; s++) {
+        for (int g = 0; g < group; g++) {
+            x_reshaped[s * group + g] = x_pad[g + group * s];
+        }
+    }
+
+    /* BiGRU: input [seg][group], nHidden=4, output [seg][2*nHidden] */
+    int16_t x_gru[68 * 8];  /* [seg][2*nHidden], max seg=33, nHidden=4 */
+    bigru_module(x_reshaped, seg, nHidden, group,
+                 ih_weight, ih_bias, hh_weight, hh_bias,
+                 re_ih_weight, re_ih_bias, re_hh_weight, re_hh_bias,
+                 Qr1, Qr2, x_gru);
+
+    /* FC: x_fc = round(x_gru * fc_weight * 2^fc_Qr) + fc_bias */
+    /* x_gru is [seg][2*nHidden], fc_weight is [2*nHidden][group] */
+    /* x_fc becomes [seg][group], then reshape to [1][seg*group] */
+    int shift_fc = -fc_Qr;
+    int64_t r_fc = ((int64_t)1 << (shift_fc - 1));
+    int in_fc = 2 * nHidden;
+
+    int32_t x_fc_2d[68 * 4];  /* [seg][group] */
+    for (int s = 0; s < seg; s++) {
+        for (int g = 0; g < group; g++) {
+            int64_t acc = 0;
+            for (int i = 0; i < in_fc; i++) {
+                /* fc_weight[in_fc][group] col-major: fc_weight[i + in_fc*g] */
+                int64_t prod = (int64_t)x_gru[s * in_fc + i] * fc_weight[i + in_fc * g];
+                if (prod >= 0) acc += (prod + r_fc) >> shift_fc;
+                else           acc += (prod - r_fc) >> shift_fc;
+            }
+            x_fc_2d[s * group + g] = sat_i32(acc + fc_bias[g]);
+        }
+    }
+
+    /* Reshape back to 1D: x_shape = reshape(x_fc.', 1, [])
+     * x_fc is [seg][group], x_fc.' is [group][seg]
+     * Column-major fill: x_shape[g + group*s] = x_fc(s,g) */
+    int32_t x_flat[260];
+    for (int g = 0; g < group; g++) {
+        for (int s = 0; s < seg; s++) {
+            x_flat[g + group * s] = x_fc_2d[s * group + g];
+        }
+    }
+
+    /* Sigmoid: de-padded output (remove last pad_len elements) */
+    for (int w = 0; w < W; w++) {
+        y[w] = sigmoid_q20_to_q15(x_flat[w]);
+    }
+}
+
+/* ================================================================
+ * shuffle_interleave — MATLAB interleave pattern
+ * ================================================================
+ * MATLAB:
+ *   y_s(1:2:end, :) = y_pconv(1:N/2, :);
+ *   y_s(2:2:end, :) = y_pconv(N/2+1:end, :);
+ */
+void shuffle_interleave(const int32_t *src, int C, int W, int32_t *dst) {
+    int half = C / 2;
+    for (int c = 0; c < half; c++) {
+        memcpy(&dst[(2 * c) * W], &src[c * W], W * sizeof(int32_t));
+        memcpy(&dst[(2 * c + 1) * W], &src[(half + c) * W], W * sizeof(int32_t));
+    }
+}
+
+/* ================================================================
+ * shuffle_deinterleave — Reverse of shuffle_interleave
+ * ================================================================
+ * MATLAB:
+ *   y(1:N/2, :) = y_s(1:2:end, :);
+ *   y(N/2+1:end, :) = y_s(2:2:end, :);
+ */
+void shuffle_deinterleave(const int32_t *src, int C, int W, int32_t *dst) {
+    int half = C / 2;
+    for (int c = 0; c < half; c++) {
+        memcpy(&dst[c * W], &src[(2 * c) * W], W * sizeof(int32_t));
+        memcpy(&dst[(half + c) * W], &src[(2 * c + 1) * W], W * sizeof(int32_t));
+    }
+}
+
+/* ================================================================
+ * log_gen_fixed — Log-Magnitude Compression
+ * ================================================================
+ * MATLAB:
+ *   x_dq = x * 2^(-20)
+ *   mag = sqrt(real^2 + imag^2)
+ *   clamped = max(mag, 1e-12)
+ *   y = log10(clamped)
+ *   y = Fix_point(y, 's32f20')
+ *
+ * C implementation: float intermediate (matching MATLAB dequant)
+ * for the sqrt and log10 operations, then re-quantize to Q20.
+ */
+void log_gen_fixed(const int32_t *real, const int32_t *imag, int W, int32_t *out) {
+    /* X2000-safe: integer sqrt + LUT log10, no float */
+    for (int w = 0; w < W; w++) {
+        uint64_t r2 = (uint64_t)((int64_t)real[w] * (int64_t)real[w]);
+        uint64_t i2 = (uint64_t)((int64_t)imag[w] * (int64_t)imag[w]);
+        uint64_t mag_sq = r2 + i2;
+        uint64_t lo = 0, hi = (mag_sq > 0xFFFFFFFEULL) ? 0xFFFFFFFFULL : (mag_sq + 1);
+        if (hi > 0xFFFFFFFFULL) hi = 0xFFFFFFFFULL;
+        while (lo + 1 < hi) {
+            uint64_t mid = (lo + hi) >> 1;
+            if (mid * mid <= mag_sq) lo = mid;
+            else hi = mid;
+        }
+        uint32_t mag = (lo > 0) ? (uint32_t)lo : 1;
+        out[w] = log10_q20((int32_t)mag);
+    }
+}
+
+/* ================================================================
+ * bm_fixed — ERB Band Merging
+ * ================================================================
+ * Low freq bins 0-64: passthrough
+ * High freq bins 65-256: merge to bins 65-128 via matrix multiply
+ */
+void bm_fixed(const int32_t *x, const uint16_t *weight, int W_in, int W_out, int32_t *y) {
+    int low_bins = 65;  /* bins 0-64 passthrough */
+    /* Passthrough low frequencies */
+    memcpy(y, x, low_bins * sizeof(int32_t));
+
+    /* High frequency merge: y[65:128] = round(x[65:256] * weight * 2^(-15)) */
+    int hi_in = W_in - low_bins;   /* 192 */
+    int hi_out = W_out - low_bins; /* 64 */
+    int64_t r = 16384;  /* 2^14 = round_const for >> 15 */
+
+    for (int o = 0; o < hi_out; o++) {
+        int64_t acc = 0;
+        for (int i = 0; i < hi_in; i++) {
+            /* weight[hi_in][hi_out] col-major: weight[i + hi_in*o] */
+            int64_t prod = (int64_t)x[low_bins + i] * weight[i + hi_in * o];
+            if (prod >= 0) acc += (prod + r) >> 15;
+            else           acc += (prod - r) >> 15;
+        }
+        y[low_bins + o] = sat_i32(acc);
+    }
+}
+
+/* ================================================================
+ * bs_fixed — ERB Band Splitting
+ * ================================================================
+ * Low freq bins 0-64: passthrough
+ * High freq bins 65-128: split to bins 65-256 via matrix multiply
+ */
+void bs_fixed(const uint16_t *x, const uint16_t *weight, int W_in, int W_out, int16_t *y) {
+    int low_bins = 65;
+    /* Passthrough low frequencies (x is uint16_t Q15, y is int16_t) */
+    for (int i = 0; i < low_bins; i++) {
+        y[i] = (int16_t)x[i];
+    }
+
+    /* High frequency split: y[65:256] = round(x[65:128] * weight * 2^(-15)) */
+    int hi_in = W_in - low_bins;   /* 64 */
+    int hi_out = W_out - low_bins; /* 192 */
+    int64_t r = 16384;  /* 2^14 */
+
+    for (int o = 0; o < hi_out; o++) {
+        int64_t acc = 0;
+        for (int i = 0; i < hi_in; i++) {
+            /* weight[hi_in][hi_out] col-major: weight[i + hi_in*o] */
+            int64_t prod = (int64_t)x[low_bins + i] * weight[i + hi_in * o];
+            if (prod >= 0) acc += (prod + r) >> 15;
+            else           acc += (prod - r) >> 15;
+        }
+        y[low_bins + o] = clamp_i16((int32_t)acc);
+    }
+}
+
+/* ================================================================
+ * mask_fixed — Apply Mask to Complex Spectrum
+ * ================================================================
+ * y_real = round(x_real .* mask * 2^(-15))
+ * y_imag = round(x_imag .* mask * 2^(-15))
+ * Returns concatenated [y_real; y_imag] in Q20
+ */
+void mask_fixed(const int16_t *mask, const int32_t *x_real, const int32_t *x_imag,
+                int W, int32_t *y) {
+    int64_t r = 16384;  /* 2^14 for >> 15 */
+    for (int i = 0; i < W; i++) {
+        int64_t prod_r = (int64_t)x_real[i] * mask[i];
+        int64_t prod_i = (int64_t)x_imag[i] * mask[i];
+        if (prod_r >= 0) y[i] = (int32_t)((prod_r + r) >> 15);
+        else             y[i] = (int32_t)((prod_r - r) >> 15);
+        if (prod_i >= 0) y[W + i] = (int32_t)((prod_i + r) >> 15);
+        else             y[W + i] = (int32_t)((prod_i - r) >> 15);
+    }
+}

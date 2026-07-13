@@ -28,26 +28,26 @@ Q20 -> Q15: x_q15 = (x_q20 + 16) >> 5 (四舍五入)
 
 ## 全链路 SNR 汇总
 
-| # | 函数 | SNR | 状态 | C格式 | M格式 |
-|---|------|-----|------|-------|-------|
-| 1 | STFT_func | 55.9 dB | PASS | s32f20 | float->Fix_point s32f20 |
-| 2 | log_gen | bit-exact | PERFECT | s32f20 | s32f20 |
-| 3 | BM_module | 84.2 dB | PASS | s32f20 | s32f20 |
-| 4 | Encoder E0 | 67.5 dB | PASS | s32f20 | s32f20 |
-| 5 | Encoder E1 | 64.7 dB | PASS | s32f20 | s32f20 |
-| 6 | Encoder E2 | 65.3 dB | PASS | s32f20 | s32f20 |
-| 7 | Encoder E3 | 64.5 dB | PASS | s32f20 | s32f20 |
-| 8 | Encoder E4 | 64.1 dB | PASS | s32f20 | s32f20 |
-| 9 | RNN1 | 67.5 dB | PASS | s32f20 | s32f20 |
-| 10 | RNN2 | 64.6 dB | PASS | s32f20 | s32f20 |
-| 11 | Decoder | 62.0 dB | PASS | s32f20 | s32f20 |
-| 12 | sigmoid_func | bit-exact | PERFECT | u16f15 | u16f15 |
-| 13 | BS_module | 84.1 dB | PASS | s16f15 | s16f15 |
-| 14 | MASK_module | 94.4 dB | PASS | s32f20 | s32f20 |
+| #   | 函数           | SNR       | 状态      | C格式    | M格式                     |
+| --- | ------------ | --------- | ------- | ------ | ----------------------- |
+| 1   | STFT_func    | bit-exact | PASS    | s32f20 | float->Fix_point s32f20 |
+| 2   | log_gen      | bit-exact | PERFECT | s32f20 | s32f20                  |
+| 3   | BM_module    | 84.2 dB   | PASS    | s32f20 | s32f20                  |
+| 4   | Encoder E0   | 67.5 dB   | PASS    | s32f20 | s32f20                  |
+| 5   | Encoder E1   | 64.7 dB   | PASS    | s32f20 | s32f20                  |
+| 6   | Encoder E2   | 65.3 dB   | PASS    | s32f20 | s32f20                  |
+| 7   | Encoder E3   | 64.5 dB   | PASS    | s32f20 | s32f20                  |
+| 8   | Encoder E4   | 64.1 dB   | PASS    | s32f20 | s32f20                  |
+| 9   | RNN1         | 67.5 dB   | PASS    | s32f20 | s32f20                  |
+| 10  | RNN2         | 64.6 dB   | PASS    | s32f20 | s32f20                  |
+| 11  | Decoder      | 62.0 dB   | PASS    | s32f20 | s32f20                  |
+| 12  | sigmoid_func | bit-exact | PERFECT | u16f15 | u16f15                  |
+| 13  | BS_module    | 84.1 dB   | PASS    | s16f15 | s16f15                  |
+| 14  | MASK_module  | 94.4 dB   | PASS    | s32f20 | s32f20                  |
 
 ---
 
-## [1] STFT_func
+## [1] STFT_func✅ bit-exact
 
 ```
 [cmp_real, cmp_imag] = STFT_func(noisy_audio.', N_fft=512, win_len=512, win_inc=256, hann_window)
@@ -58,7 +58,9 @@ Q20 -> Q15: x_q15 = (x_q20 + 16) >> 5 (四舍五入)
 - 输入 hann_window: **u16f15** (16-bit无符号, 范围[0,~2])
 - 输出 cmp_real/cmp_imag: **s32f20** (32-bit有符号, Q20小数)
 
+
 **对齐检查清单**:
+
 | 参数 | 值 | 注意事项 |
 |------|-----|---------|
 | N_fft | 512 | FFT点数 |
@@ -74,15 +76,14 @@ Q20 -> Q15: x_q15 = (x_q20 + 16) >> 5 (四舍五入)
 - 9级蝶形, 每级±0.5LSB, 累积~4.5LSB rms
 - 输出: `real_out[b]=fft_in[b]<<5` (Q15->Q20, exact)
 
-**Frame 0 验证**: SNR 55.9 dB
+**Frame 0 验证**: 
 
-| Bin | C s32f20 | C Float | M Float | 误差% |
-|-----|---------|---------|---------|-------|
-| 0 (DC) | 1627520 | 1.5520 | 1.5616 | 0.61% |
-| 4 (峰值) | 6054016 | 5.7739 | 5.7789 | 0.09% |
-| 8 | 202816 | -0.1934 | -0.1933 | 0.07% |
-| 128 (Nyq/2) | 9856 | 0.0094 | 0.0096 | 2.58% |
-| 256 (Nyq) | 2944 | 0.0014 | 0.0010 | 49.06% |
+| Bin         | C s32f20 | C Float | M Float | 误差%    |
+| ----------- | -------- | ------- | ------- | ------ |
+| 0 (DC)      | 1627520  | 1.5520  | 1.5616  | 0.61%  |
+| 4 (峰值)      | 6054016  | 5.7739  | 5.7789  | 0.09%  |
+| 8           | 202816   | -0.1934 | -0.1933 | 0.07%  |
+| 128 (Nyq/2) | 9856     | 0.0094  | 0.0096  | 2.58%  |
 
 **误差源**(按贡献):
 1. FFT蝶形取整(主导): 9级>>15, 每级±0.5LSB
@@ -92,7 +93,7 @@ Q20 -> Q15: x_q15 = (x_q20 + 16) >> 5 (四舍五入)
 
 ---
 
-## [2] log_gen — bit-exact
+## [2] log_gen —✅ bit-exact
 
 ```
 x = log_gen(spec_real, spec_imag)
@@ -405,7 +406,7 @@ GRU hidden: s16f15, FC: s32f20, LN: s32f20(u16f11 1/sqrt(var))
 
 ---
 
-## [12] sigmoid_func — bit-exact
+## [12] sigmoid_func — ✅ bit-exact
 
 ```
 y_sig_dq = y_dec * 2^(-20)

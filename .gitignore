@@ -1,0 +1,13 @@
+*.wav
+*.raw
+*.bin
+*.o
+*.a
+*.so
+dump_c/
+dump_matlab/
+ulunas_nr_full
+ulunas_nr_test
+ulunas_nr_dbg
+ulunas_nr_asan
+ulunas_nr_mips

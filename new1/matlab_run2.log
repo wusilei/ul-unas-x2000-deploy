@@ -1,0 +1,23 @@
+[警告: 无法识别的命令行选项: noDisplay。] 
+ 
+要开始，请键入 doc。
+有关产品信息，请访问 www.mathworks.com。
+ 
+=== Exporting Frame 1 Golden Data ===
+  Wrote dump_matlab/frame0_stft_real.bin (257 elements)
+  Wrote dump_matlab/frame0_stft_imag.bin (257 elements)
+  Wrote dump_matlab/frame0_log_gen.bin (257 elements)
+  Wrote dump_matlab/frame0_bm.bin (129 elements)
+  Wrote dump_matlab/frame0_e0_xconv.bin (780 elements)
+  Wrote dump_matlab/frame0_e1_xmb0.bin (792 elements)
+  Wrote dump_matlab/frame0_e2_xdws0.bin (792 elements)
+  Wrote dump_matlab/frame0_e3_xmb1.bin (1056 elements)
+  Wrote dump_matlab/frame0_e4_xdws1.bin (528 elements)
+  Wrote dump_matlab/frame0_gdprnn1.bin (528 elements)
+  Wrote dump_matlab/frame0_gdprnn2.bin (528 elements)
+  Wrote dump_matlab/frame0_decoder.bin (129 elements)
+  Wrote dump_matlab/frame0_sigmoid.bin (129 elements)
+  Wrote dump_matlab/frame0_bs.bin (257 elements)
+  Wrote dump_matlab/frame0_mask_real.bin (257 elements)
+  Wrote dump_matlab/frame0_mask_imag.bin (257 elements)
+=== Golden export complete ===

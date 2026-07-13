@@ -1,0 +1,18 @@
+[警告: 无法识别的命令行选项: nodisplay。] 
+ 
+要开始，请键入 doc。
+有关产品信息，请访问 www.mathworks.com。
+ 
+=== Fixed-point STFT test ===
+Q20 real[1:10]:
+     1645824    -1760288     1750368    -3440736     6059584    -3741664      -22496       -6400     -202592     1115488
+
+Q20 imag[1:10]:
+     0     0     0     0     0     0     0     0     0     0
+
+nonzeros imag Q20: 0
+---
+Float FFT then Fix_point Q20:
+real[1:3]: 1645824 -1760284  1750376
+imag[1:3]: 0  0  0
+nonzeros imag: 0

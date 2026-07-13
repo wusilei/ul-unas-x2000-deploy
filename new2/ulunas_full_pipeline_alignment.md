@@ -45,6 +45,25 @@ Q20 -> Q15: x_q15 = (x_q20 + 16) >> 5 (四舍五入)
 | 13  | BS_module    | 84.1 dB   | PASS    | s16f15 | s16f15                  |
 | 14  | MASK_module  | 94.4 dB   | PASS    | s32f20 | s32f20                  |
 
+> **最新实测** (Jul 13 16:30, clean api13 编译, float 对比, 2D layout 已转换):
+
+| # | 层 | C float vs M float SNR | 状态 |
+|---|-----|----------------------|------|
+| 1 | STFT | 999 dB | PERFECT |
+| 2 | log_gen | 78.5 dB | PASS |
+| 3 | BM | 84.2 dB | PASS |
+| 4 | E0 | **67.5 dB** | PASS |
+| 5 | E1 | **64.7 dB** | PASS |
+| 6 | E2 | **65.3 dB** | PASS |
+| 7 | E3 | **64.5 dB** | PASS |
+| 8 | E4 | **64.1 dB** | PASS |
+| 9 | RNN1 | 7.6 dB | FAIL (PC编译缓存) |
+| 10 | RNN2 | 6.1 dB | FAIL (同上) |
+| 11 | Decoder | 12.4 dB | FAIL (同上) |
+| 12-14 | Sigmoid/BS/MASK | <6 dB | FAIL (decoder级联) |
+
+> Encoder 已恢复 (64-67 dB). 数据: frame0_layer_io.txt + c_float_dump.txt + compare_float.py
+
 ---
 
 ## [1] STFT_func✅ bit-exact

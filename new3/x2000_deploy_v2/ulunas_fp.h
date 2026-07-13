@@ -357,12 +357,12 @@ void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *hh_weight, const int32_t *hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint16_t *y);
+                    uint32_t *y);
 
 /**
  * ctfa_fa_module: Frequency Attention
  * x[C][W] in Q20 → square → mean over C → pad → reshape → BiGRU → FC → reshape → sigmoid
- * Output: y[1][W] in Q15 (attention weights per frequency)
+ * Output: y[1][W] in Q20 (attention weights per frequency)
  */
 void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     int group, int seg, int pad_len,
@@ -372,7 +372,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *re_hh_weight, const int32_t *re_hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint16_t *y);
+                    uint32_t *y);
 
 /* --- Shuffle Operators --- */
 

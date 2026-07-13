@@ -254,7 +254,7 @@ int main(int argc, char **argv) {
             }
 
             /* E0.4: cTFA TA */
-            uint16_t y_ta[12];
+            uint32_t y_ta[12];
             ctfa_ta_module(y_ap, 12, 65, E0_CTFA_TA_GRU_NHID,
                            st.tfa_cache_e0,
                            encoder_en_convs_0_ops_4_ta_gru_weight_ih_l0,
@@ -338,7 +338,7 @@ int main(int argc, char **argv) {
             }
 
             /* E0.5: cTFA FA */
-            uint16_t y_fa[65];
+            uint32_t y_fa[65];
             ctfa_fa_module(y_ap, 12, 65, E0_CTFA_FA_GRU_NHID,
                            E0_CTFA_FA_GROUP, E0_CTFA_FA_SEG, E0_CTFA_FA_PAD,
                            encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,

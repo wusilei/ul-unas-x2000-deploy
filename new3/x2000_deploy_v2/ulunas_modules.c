@@ -61,7 +61,7 @@ void encoder_layer0_xconv(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                      E0_TCONV_AFFINE_QR1, E0_TCONV_AFFINE_QR2, 12, 65, y_ap);
 
     /* cTFA TA */
-    uint16_t y_ta[12];
+    uint32_t y_ta[12];
     ctfa_ta_module(y_ap, 12, 65, E0_CTFA_TA_GRU_NHID,
                    st->tfa_cache_e0,
                    encoder_en_convs_0_ops_4_ta_gru_weight_ih_l0,
@@ -74,7 +74,7 @@ void encoder_layer0_xconv(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[65];
+    uint32_t y_fa[65];
     ctfa_fa_module(y_ap, 12, 65, E0_CTFA_FA_GRU_NHID,
                    E0_CTFA_FA_GROUP, E0_CTFA_FA_SEG, E0_CTFA_FA_PAD,
                    encoder_en_convs_0_ops_4_fa_gru_weight_ih_l0,
@@ -91,16 +91,16 @@ void encoder_layer0_xconv(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    y_fa);
 
     /* cTFA fusion: y_t = round(tconv .* ta' * 2^(-15)); y = round(y_t .* fa * 2^(-15)) */
-    int64_t r_fusion = 16384;  /* 2^14 for >> 15 */
+    int64_t r_fusion = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 12; c++) {
         for (int w = 0; w < 65; w++) {
             int64_t prod1 = (int64_t)y_ap[c * 65 + w] * y_ta[c];
             int32_t y_t;
-            if (prod1 >= 0) y_t = (int32_t)((prod1 + r_fusion) >> 15);
-            else            y_t = (int32_t)((prod1 - r_fusion) >> 15);
+            if (prod1 >= 0) y_t = (int32_t)((prod1 + r_fusion) >> 20);
+            else            y_t = (int32_t)((prod1 - r_fusion) >> 20);
             int64_t prod2 = (int64_t)y_t * y_fa[w];
-            if (prod2 >= 0) y[c * 65 + w] = (int32_t)((prod2 + r_fusion) >> 15);
-            else            y[c * 65 + w] = (int32_t)((prod2 - r_fusion) >> 15);
+            if (prod2 >= 0) y[c * 65 + w] = (int32_t)((prod2 + r_fusion) >> 20);
+            else            y[c * 65 + w] = (int32_t)((prod2 - r_fusion) >> 20);
         }
     }
 }
@@ -180,7 +180,7 @@ void encoder_layer1_xmb0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
             E1_PCONV1_BN_QR1, E1_PCONV1_BN_QR2, 24, 24 * 33, y_pconv1);  /* in-place BN on y_pconv1 */
 
     /* cTFA TA (on y_pconv1) */
-    uint16_t y_ta[24];
+    uint32_t y_ta[24];
     ctfa_ta_module(y_pconv1, 24, 33, E1_CTFA_TA_GRU_NHID,
                    st->tfa_cache_e1,
                    encoder_en_convs_1_pconv2_2_ta_gru_weight_ih_l0,
@@ -192,7 +192,7 @@ void encoder_layer1_xmb0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E1_CTFA_TA_GRU_QR1, E1_CTFA_TA_GRU_QR2, E1_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_pconv1, 24, 33, E1_CTFA_FA_GRU_NHID,
                    E1_CTFA_FA_GROUP, E1_CTFA_FA_SEG, E1_CTFA_FA_PAD,
                    encoder_en_convs_1_pconv2_2_fa_gru_weight_ih_l0,
@@ -209,16 +209,16 @@ void encoder_layer1_xmb0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
 
     /* cTFA fusion + final shuffle */
     int32_t y_ctfa[24 * 33];
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 24; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_pconv1[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 
@@ -284,7 +284,7 @@ void encoder_layer2_xdws0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                      E2_TCONV_AFFINE_QR1, E2_TCONV_AFFINE_QR2, 24, 33, y_tconv_ap);
 
     /* cTFA TA */
-    uint16_t y_ta[24];
+    uint32_t y_ta[24];
     ctfa_ta_module(y_tconv_ap, 24, 33, E2_CTFA_TA_GRU_NHID,
                    st->tfa_cache_e2,
                    encoder_en_convs_2_dconv_4_ta_gru_weight_ih_l0,
@@ -296,7 +296,7 @@ void encoder_layer2_xdws0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E2_CTFA_TA_GRU_QR1, E2_CTFA_TA_GRU_QR2, E2_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_tconv_ap, 24, 33, E2_CTFA_FA_GRU_NHID,
                    E2_CTFA_FA_GROUP, E2_CTFA_FA_SEG, E2_CTFA_FA_PAD,
                    encoder_en_convs_2_dconv_4_fa_gru_weight_ih_l0,
@@ -312,16 +312,16 @@ void encoder_layer2_xdws0(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E2_CTFA_FA_GRU_QR1, E2_CTFA_FA_GRU_QR2, E2_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 24; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_tconv_ap[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 }
@@ -397,7 +397,7 @@ void encoder_layer3_xmb1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
             E3_PCONV1_BN_QR1, E3_PCONV1_BN_QR2, 32, 32 * 33, y_pconv1);
 
     /* cTFA TA */
-    uint16_t y_ta[32];
+    uint32_t y_ta[32];
     ctfa_ta_module(y_pconv1, 32, 33, E3_CTFA_TA_GRU_NHID,
                    st->tfa_cache_e3,
                    encoder_en_convs_3_pconv2_2_ta_gru_weight_ih_l0,
@@ -409,7 +409,7 @@ void encoder_layer3_xmb1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E3_CTFA_TA_GRU_QR1, E3_CTFA_TA_GRU_QR2, E3_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_pconv1, 32, 33, E3_CTFA_FA_GRU_NHID,
                    E3_CTFA_FA_GROUP, E3_CTFA_FA_SEG, E3_CTFA_FA_PAD,
                    encoder_en_convs_3_pconv2_2_fa_gru_weight_ih_l0,
@@ -426,16 +426,16 @@ void encoder_layer3_xmb1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
 
     /* cTFA fusion */
     int32_t y_ctfa[32 * 33];
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 32; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_pconv1[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 
@@ -500,7 +500,7 @@ void encoder_layer4_xdws1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                      E4_NONTCONV_AFFINE_QR1, E4_NONTCONV_AFFINE_QR2, 16, 33, y_tconv_ap);
 
     /* cTFA TA */
-    uint16_t y_ta[16];
+    uint32_t y_ta[16];
     ctfa_ta_module(y_tconv_ap, 16, 33, E4_CTFA_TA_GRU_NHID,
                    st->tfa_cache_e4,
                    encoder_en_convs_4_dconv_4_ta_gru_weight_ih_l0,
@@ -512,7 +512,7 @@ void encoder_layer4_xdws1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E4_CTFA_TA_GRU_QR1, E4_CTFA_TA_GRU_QR2, E4_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_tconv_ap, 16, 33, E4_CTFA_FA_GRU_NHID,
                    E4_CTFA_FA_GROUP, E4_CTFA_FA_SEG, E4_CTFA_FA_PAD,
                    encoder_en_convs_4_dconv_4_fa_gru_weight_ih_l0,
@@ -528,16 +528,16 @@ void encoder_layer4_xdws1(const int32_t *x, ulunas_state_t *st, int32_t *y) {
                    E4_CTFA_FA_GRU_QR1, E4_CTFA_FA_GRU_QR2, E4_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 16; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_tconv_ap[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 }
@@ -881,7 +881,7 @@ void decoder_layer0_de_xdws0(const int32_t *x, const int32_t *skip, ulunas_state
                      D0_NONTCONV_AFFINE_QR1, D0_NONTCONV_AFFINE_QR2, 32, 33, y_tconv_ap);
 
     /* cTFA TA */
-    uint16_t y_ta[32];
+    uint32_t y_ta[32];
     ctfa_ta_module(y_tconv_ap, 32, 33, D0_CTFA_TA_GRU_NHID,
                    st->tfa_cache_d0,
                    decoder_de_convs_0_dconv_4_ta_gru_weight_ih_l0,
@@ -893,7 +893,7 @@ void decoder_layer0_de_xdws0(const int32_t *x, const int32_t *skip, ulunas_state
                    D0_CTFA_TA_GRU_QR1, D0_CTFA_TA_GRU_QR2, D0_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_tconv_ap, 32, 33, D0_CTFA_FA_GRU_NHID,
                    D0_CTFA_FA_GROUP, D0_CTFA_FA_SEG, D0_CTFA_FA_PAD,
                    decoder_de_convs_0_dconv_4_fa_gru_weight_ih_l0,
@@ -909,16 +909,16 @@ void decoder_layer0_de_xdws0(const int32_t *x, const int32_t *skip, ulunas_state
                    D0_CTFA_FA_GRU_QR1, D0_CTFA_FA_GRU_QR2, D0_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 32; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_tconv_ap[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 }
@@ -1001,7 +1001,7 @@ void decoder_layer1_de_xmb0(const int32_t *x, const int32_t *skip, ulunas_state_
             D1_PCONV1_BN_QR1, D1_PCONV1_BN_QR2, 24, 24 * 33, y_pconv1);
 
     /* cTFA TA */
-    uint16_t y_ta[24];
+    uint32_t y_ta[24];
     ctfa_ta_module(y_pconv1, 24, 33, D1_CTFA_TA_GRU_NHID,
                    st->tfa_cache_d1,
                    decoder_de_convs_1_pconv2_2_ta_gru_weight_ih_l0,
@@ -1013,7 +1013,7 @@ void decoder_layer1_de_xmb0(const int32_t *x, const int32_t *skip, ulunas_state_
                    D1_CTFA_TA_GRU_QR1, D1_CTFA_TA_GRU_QR2, D1_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_pconv1, 24, 33, D1_CTFA_FA_GRU_NHID,
                    D1_CTFA_FA_GROUP, D1_CTFA_FA_SEG, D1_CTFA_FA_PAD,
                    decoder_de_convs_1_pconv2_2_fa_gru_weight_ih_l0,
@@ -1029,17 +1029,17 @@ void decoder_layer1_de_xmb0(const int32_t *x, const int32_t *skip, ulunas_state_
                    D1_CTFA_FA_GRU_QR1, D1_CTFA_FA_GRU_QR2, D1_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     int32_t y_ctfa[24 * 33];
     for (int c = 0; c < 24; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_pconv1[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y_ctfa[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y_ctfa[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 
@@ -1110,7 +1110,7 @@ void decoder_layer2_de_xdws1(const int32_t *x, const int32_t *skip, ulunas_state
                      D2_TCONV_AFFINE_QR1, D2_TCONV_AFFINE_QR2, 24, 33, y_tconv_ap);
 
     /* cTFA TA */
-    uint16_t y_ta[24];
+    uint32_t y_ta[24];
     ctfa_ta_module(y_tconv_ap, 24, 33, D2_CTFA_TA_GRU_NHID,
                    st->tfa_cache_d2,
                    decoder_de_convs_2_dconv_4_ta_gru_weight_ih_l0,
@@ -1122,7 +1122,7 @@ void decoder_layer2_de_xdws1(const int32_t *x, const int32_t *skip, ulunas_state
                    D2_CTFA_TA_GRU_QR1, D2_CTFA_TA_GRU_QR2, D2_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[33];
+    uint32_t y_fa[33];
     ctfa_fa_module(y_tconv_ap, 24, 33, D2_CTFA_FA_GRU_NHID,
                    D2_CTFA_FA_GROUP, D2_CTFA_FA_SEG, D2_CTFA_FA_PAD,
                    decoder_de_convs_2_dconv_4_fa_gru_weight_ih_l0,
@@ -1138,16 +1138,16 @@ void decoder_layer2_de_xdws1(const int32_t *x, const int32_t *skip, ulunas_state
                    D2_CTFA_FA_GRU_QR1, D2_CTFA_FA_GRU_QR2, D2_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int c = 0; c < 24; c++) {
         for (int w = 0; w < 33; w++) {
             int64_t p1 = (int64_t)y_tconv_ap[c * 33 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 15);
-            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y[c * 33 + w] = (int32_t)((p2 + r) >> 20);
+            else         y[c * 33 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 }
@@ -1231,7 +1231,7 @@ void decoder_layer3_de_xmb1(const int32_t *x, const int32_t *skip, ulunas_state_
             D3_PCONV1_BN_QR1, D3_PCONV1_BN_QR2, 12, 12 * 65, y_pconv1);
 
     /* cTFA TA */
-    uint16_t y_ta[12];
+    uint32_t y_ta[12];
     ctfa_ta_module(y_pconv1, 12, 65, D3_CTFA_TA_GRU_NHID,
                    st->tfa_cache_d3,
                    decoder_de_convs_3_pconv2_2_ta_gru_weight_ih_l0,
@@ -1243,7 +1243,7 @@ void decoder_layer3_de_xmb1(const int32_t *x, const int32_t *skip, ulunas_state_
                    D3_CTFA_TA_GRU_QR1, D3_CTFA_TA_GRU_QR2, D3_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[65];
+    uint32_t y_fa[65];
     ctfa_fa_module(y_pconv1, 12, 65, D3_CTFA_FA_GRU_NHID,
                    D3_CTFA_FA_GROUP, D3_CTFA_FA_SEG, D3_CTFA_FA_PAD,
                    decoder_de_convs_3_pconv2_2_fa_gru_weight_ih_l0,
@@ -1259,17 +1259,17 @@ void decoder_layer3_de_xmb1(const int32_t *x, const int32_t *skip, ulunas_state_
                    D3_CTFA_FA_GRU_QR1, D3_CTFA_FA_GRU_QR2, D3_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     int32_t y_ctfa[12 * 65];
     for (int c = 0; c < 12; c++) {
         for (int w = 0; w < 65; w++) {
             int64_t p1 = (int64_t)y_pconv1[c * 65 + w] * y_ta[c];
             int32_t yt;
-            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-            else         yt = (int32_t)((p1 - r) >> 15);
+            if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+            else         yt = (int32_t)((p1 - r) >> 20);
             int64_t p2 = (int64_t)yt * y_fa[w];
-            if (p2 >= 0) y_ctfa[c * 65 + w] = (int32_t)((p2 + r) >> 15);
-            else         y_ctfa[c * 65 + w] = (int32_t)((p2 - r) >> 15);
+            if (p2 >= 0) y_ctfa[c * 65 + w] = (int32_t)((p2 + r) >> 20);
+            else         y_ctfa[c * 65 + w] = (int32_t)((p2 - r) >> 20);
         }
     }
 
@@ -1326,7 +1326,7 @@ void decoder_layer4_de_xconv(const int32_t *x, const int32_t *skip, ulunas_state
             D4_TCONV_BN_QR1, D4_TCONV_BN_QR2, 1, 1 * 129, y_bn);
 
     /* cTFA TA (nHidden=2, 1 output channel) */
-    uint16_t y_ta[1];
+    uint32_t y_ta[1];
     ctfa_ta_module(y_bn, 1, 129, D4_CTFA_TA_GRU_NHID,
                    st->tfa_cache_d4,
                    decoder_de_convs_4_ops_4_ta_gru_weight_ih_l0,
@@ -1338,7 +1338,7 @@ void decoder_layer4_de_xconv(const int32_t *x, const int32_t *skip, ulunas_state
                    D4_CTFA_TA_GRU_QR1, D4_CTFA_TA_GRU_QR2, D4_CTFA_TA_FC_QR, y_ta);
 
     /* cTFA FA */
-    uint16_t y_fa[129];
+    uint32_t y_fa[129];
     ctfa_fa_module(y_bn, 1, 129, D4_CTFA_FA_GRU_NHID,
                    D4_CTFA_FA_GROUP, D4_CTFA_FA_SEG, D4_CTFA_FA_PAD,
                    decoder_de_convs_4_ops_4_fa_gru_weight_ih_l0,
@@ -1354,15 +1354,15 @@ void decoder_layer4_de_xconv(const int32_t *x, const int32_t *skip, ulunas_state
                    D4_CTFA_FA_GRU_QR1, D4_CTFA_FA_GRU_QR2, D4_CTFA_FA_FC_QR, y_fa);
 
     /* cTFA fusion */
-    int64_t r = 16384;
+    int64_t r = 524288;  /* 2^19 for >> 20 */
     for (int w = 0; w < 129; w++) {
         int64_t p1 = (int64_t)y_bn[w] * y_ta[0];
         int32_t yt;
-        if (p1 >= 0) yt = (int32_t)((p1 + r) >> 15);
-        else         yt = (int32_t)((p1 - r) >> 15);
+        if (p1 >= 0) yt = (int32_t)((p1 + r) >> 20);
+        else         yt = (int32_t)((p1 - r) >> 20);
         int64_t p2 = (int64_t)yt * y_fa[w];
-        if (p2 >= 0) y[w] = (int32_t)((p2 + r) >> 15);
-        else         y[w] = (int32_t)((p2 - r) >> 15);
+        if (p2 >= 0) y[w] = (int32_t)((p2 + r) >> 20);
+        else         y[w] = (int32_t)((p2 - r) >> 20);
     }
 }
 

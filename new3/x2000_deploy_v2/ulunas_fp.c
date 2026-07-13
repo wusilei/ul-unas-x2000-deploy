@@ -989,11 +989,8 @@ void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *hh_weight, const int32_t *hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint16_t *y) {
+                    uint32_t *y) {
     /* Step 1: Square + average over frequency → [C] */
-    /* Use float intermediate (matching MATLAB dequant) or int64 */
-    int32_t x_agg[32];  /* max C for TA: E3 has 64, use larger... */
-    /* Actually max TA input C: E3 has 32 channels. E0 has 12. */
     int32_t x_agg_buf[128];  /* safe max */
 
     for (int c = 0; c < C; c++) {
@@ -1043,7 +1040,7 @@ void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
             else           acc += (prod - r_fc) >> shift_fc;
         }
         int32_t fc_out = sat_i32(acc + fc_bias[c]);
-        y[c] = sigmoid_q20_to_q15(fc_out);
+        y[c] = sigmoid_q20_to_q20(fc_out);
     }
 }
 
@@ -1064,7 +1061,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *re_hh_weight, const int32_t *re_hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint16_t *y) {
+                    uint32_t *y) {
     /* Step 1: Square + mean over channels → [W] */
     int32_t x_agg[260];  /* max W+pad */
     for (int w = 0; w < W; w++) {
@@ -1136,7 +1133,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
 
     /* Sigmoid: de-padded output (remove last pad_len elements) */
     for (int w = 0; w < W; w++) {
-        y[w] = sigmoid_q20_to_q15(x_flat[w]);
+        y[w] = sigmoid_q20_to_q20(x_flat[w]);
     }
 }
 

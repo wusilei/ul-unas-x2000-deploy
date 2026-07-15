@@ -1,0 +1,18 @@
+[警告: 无法识别的命令行选项: nodisplay。] 
+ 
+要开始，请键入 doc。
+有关产品信息，请访问 www.mathworks.com。
+ 
+=== STFT diagnostic ===
+size real: 626  257
+size imag: 626  257
+Frame 1 real[1:10]:
+    1.5616   -1.6787    1.6692   -3.2814    5.7789   -3.5684   -0.0213   -0.0061   -0.1933    1.0637
+
+Frame 1 imag[1:10]:
+   1.0e-06 *
+
+         0    0.1220    0.0466    0.0931   -0.0596   -0.2906    0.0253    0.1677    0.0382    0.0335
+
+nonzeros in imag frame1: 248
+max abs imag frame1: 2.9057e-07

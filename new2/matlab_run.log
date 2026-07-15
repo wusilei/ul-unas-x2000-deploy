@@ -1,0 +1,22 @@
+[警告: 无法识别的命令行选项: noDisplay。] 
+ 
+要开始，请键入 doc。
+有关产品信息，请访问 www.mathworks.com。
+ 
+[警告: 名称不存在或不是目录: D:\haidesi\haidesi\ul-unas-x2000-deploy\new1\para_in_mat_FP] 
+[> 位置：path (第 109 行)
+位置: addpath (第 86 行)
+位置: export_frame0_golden (第 6 行)
+位置: run (第 91 行)] 
+[警告: 名称不存在或不是目录: D:\haidesi\haidesi\ul-unas-x2000-deploy\new1\test_wavs] 
+[> 位置：path (第 109 行)
+位置: addpath (第 86 行)
+位置: export_frame0_golden (第 7 行)
+位置: run (第 91 行)] 
+[警告: 目录已存在。] 
+[> 位置：export_frame0_golden (第 8 行)
+位置: run (第 91 行)] 
+ERROR: 无法打开文件。
+  at E:\app\matlab\toolbox\matlab\iofun\importdata.m line 139
+  at D:\haidesi\haidesi\ul-unas-x2000-deploy\new1\export_frame0_golden.m line 11
+  at E:\app\matlab\toolbox\matlab\lang\run.m line 91

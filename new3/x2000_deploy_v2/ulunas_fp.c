@@ -851,84 +851,6 @@ void gru_module(const int32_t *x_t, int nHidden, int in_dim,
     }
 }
 
-/* Q20 GRU helpers (new3) */
-uint32_t sigmoid_q20_to_q20(int32_t x_q20) { return (uint32_t)sigmoid_q20_to_q15(x_q20) << 5; }
-int32_t tanh_q20_to_q20(int32_t x_q20) { return (int32_t)tanh_q20_to_q15(x_q20) << 5; }
-
-void gru_module_q20(const int32_t *x_t, int nHidden, int in_dim,
-                    int32_t *h_cache,
-                    const int16_t *ih_weight, const int32_t *ih_bias,
-                    const int16_t *hh_weight, const int32_t *hh_bias,
-                    int Qr1, int Qr2, int16_t *y) {
-    int shift1 = -Qr1;
-    int shift2 = -Qr2 + 5;
-    int64_t r1 = ((int64_t)1 << (shift1 - 1));
-    int64_t r2 = ((int64_t)1 << (shift2 - 1));
-    int64_t round_gate = ((int64_t)1 << (20 - 1));
-    int32_t r_buf[64], z_buf[64], n_buf[64], h_t_buf[64];
-    for (int j = 0; j < nHidden; j++) {
-        int64_t sum_ih = 0, sum_hh = 0;
-        for (int i = 0; i < in_dim; i++) sum_ih += (int64_t)x_t[i] * ih_weight[i + in_dim * j];
-        for (int i = 0; i < nHidden; i++) sum_hh += (int64_t)h_cache[i] * hh_weight[i + nHidden * j];
-        int64_t acc = 0;
-        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1; else acc += (sum_ih - r1) >> shift1;
-        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2; else acc += (sum_hh - r2) >> shift2;
-        acc += ih_bias[j] + hh_bias[j]; r_buf[j] = sat_i32(acc);
-    }
-    for (int j = 0; j < nHidden; j++) {
-        int64_t sum_ih = 0, sum_hh = 0;
-        for (int i = 0; i < in_dim; i++) sum_ih += (int64_t)x_t[i] * ih_weight[i + in_dim * (nHidden + j)];
-        for (int i = 0; i < nHidden; i++) sum_hh += (int64_t)h_cache[i] * hh_weight[i + nHidden * (nHidden + j)];
-        int64_t acc = 0;
-        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1; else acc += (sum_ih - r1) >> shift1;
-        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2; else acc += (sum_hh - r2) >> shift2;
-        acc += ih_bias[nHidden + j] + hh_bias[nHidden + j]; z_buf[j] = sat_i32(acc);
-    }
-    for (int j = 0; j < nHidden; j++) {
-        int64_t sum_hh = 0;
-        for (int i = 0; i < nHidden; i++) sum_hh += (int64_t)h_cache[i] * hh_weight[i + nHidden * (2 * nHidden + j)];
-        int64_t acc = 0;
-        if (sum_hh >= 0) acc += (sum_hh + r2) >> shift2; else acc += (sum_hh - r2) >> shift2;
-        acc += hh_bias[2 * nHidden + j]; h_t_buf[j] = sat_i32(acc);
-    }
-    for (int j = 0; j < nHidden; j++) {
-        int64_t sum_ih = 0;
-        for (int i = 0; i < in_dim; i++) sum_ih += (int64_t)x_t[i] * ih_weight[i + in_dim * (2 * nHidden + j)];
-        int64_t acc = 0;
-        if (sum_ih >= 0) acc += (sum_ih + r1) >> shift1; else acc += (sum_ih - r1) >> shift1;
-        uint32_t r_q20 = sigmoid_q20_to_q20(r_buf[j]);
-        int64_t prod_gate = (int64_t)r_q20 * h_t_buf[j];
-        int32_t gc = (prod_gate >= 0) ? (int32_t)((prod_gate + round_gate) >> 20) : (int32_t)((prod_gate - round_gate) >> 20);
-        acc += gc + ih_bias[2 * nHidden + j]; n_buf[j] = sat_i32(acc);
-    }
-    for (int j = 0; j < nHidden; j++) {
-        uint32_t z_q20 = sigmoid_q20_to_q20(z_buf[j]);
-        int32_t n_q20 = tanh_q20_to_q20(n_buf[j]);
-        int64_t omz = 1048576LL - (int64_t)z_q20;
-        int64_t term1 = omz * n_q20;
-        int32_t t1 = (term1 >= 0) ? (int32_t)((term1 + round_gate) >> 20) : (int32_t)((term1 - round_gate) >> 20);
-        int64_t term2 = (int64_t)z_q20 * h_cache[j];
-        int32_t t2 = (term2 >= 0) ? (int32_t)((term2 + round_gate) >> 20) : (int32_t)((term2 - round_gate) >> 20);
-        int64_t hn = (int64_t)t1 + (int64_t)t2;
-        h_cache[j] = sat_s20(hn);
-        y[j] = sat_i16((int32_t)((h_cache[j] + 16) >> 5));
-    }
-}
-
-void bigru_module_q20(const int32_t *x, int T, int nHidden, int in_dim,
-                      const int16_t *ih_weight, const int32_t *ih_bias,
-                      const int16_t *hh_weight, const int32_t *hh_bias,
-                      const int16_t *re_ih_weight, const int32_t *re_ih_bias,
-                      const int16_t *re_hh_weight, const int32_t *re_hh_bias,
-                      int Qr1, int Qr2, int16_t *y) {
-    int32_t h_fwd[32] = {0}, h_rev[32] = {0};
-    int16_t *y_rev = (int16_t *)malloc(T * nHidden * sizeof(int16_t));
-    for (int t = 0; t < T; t++) gru_module_q20(&x[t * in_dim], nHidden, in_dim, h_fwd, ih_weight, ih_bias, hh_weight, hh_bias, Qr1, Qr2, &y[t * (2 * nHidden)]);
-    for (int t = 0; t < T; t++) { int tr = T-1-t; gru_module_q20(&x[tr * in_dim], nHidden, in_dim, h_rev, re_ih_weight, re_ih_bias, re_hh_weight, re_hh_bias, Qr1, Qr2, &y_rev[t * nHidden]); }
-    for (int t = 0; t < T; t++) for (int j = 0; j < nHidden; j++) y[t * (2 * nHidden) + nHidden + j] = y_rev[(T - 1 - t) * nHidden + j];
-    free(y_rev);
-}
-
 /* ================================================================
  * bigru_module — Bidirectional GRU
  * ================================================================
@@ -984,13 +906,16 @@ void bigru_module(const int32_t *x, int T, int nHidden, int in_dim,
  *   → sigmoid → u16f15
  */
 void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
-                    int32_t *h_cache,
+                    int16_t *h_cache,
                     const int16_t *ih_weight, const int32_t *ih_bias,
                     const int16_t *hh_weight, const int32_t *hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint32_t *y) {
+                    uint16_t *y) {
     /* Step 1: Square + average over frequency → [C] */
+    /* Use float intermediate (matching MATLAB dequant) or int64 */
+    int32_t x_agg[32];  /* max C for TA: E3 has 64, use larger... */
+    /* Actually max TA input C: E3 has 32 channels. E0 has 12. */
     int32_t x_agg_buf[128];  /* safe max */
 
     for (int c = 0; c < C; c++) {
@@ -1024,7 +949,7 @@ void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
     /* GRU_module expects x_t[in_dim], where in_dim = C */
     /* But GRU_module treats input as [in_dim] array in Q20 */
     /* x_agg_buf is in Q20 already, use as input */
-    gru_module_q20(x_agg_buf, nHidden, C, h_cache,
+    gru_module(x_agg_buf, nHidden, C, h_cache,
                ih_weight, ih_bias, hh_weight, hh_bias, Qr1, Qr2, x_gru);
 
     /* Step 3: FC + sigmoid */
@@ -1040,7 +965,7 @@ void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
             else           acc += (prod - r_fc) >> shift_fc;
         }
         int32_t fc_out = sat_i32(acc + fc_bias[c]);
-        y[c] = sigmoid_q20_to_q20(fc_out);
+        y[c] = sigmoid_q20_to_q15(fc_out);
     }
 }
 
@@ -1061,7 +986,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *re_hh_weight, const int32_t *re_hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint32_t *y) {
+                    uint16_t *y) {
     /* Step 1: Square + mean over channels → [W] */
     int32_t x_agg[260];  /* max W+pad */
     for (int w = 0; w < W; w++) {
@@ -1095,7 +1020,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
 
     /* BiGRU: input [seg][group], nHidden=4, output [seg][2*nHidden] */
     int16_t x_gru[68 * 8];  /* [seg][2*nHidden], max seg=33, nHidden=4 */
-    bigru_module_q20(x_reshaped, seg, nHidden, group,
+    bigru_module(x_reshaped, seg, nHidden, group,
                  ih_weight, ih_bias, hh_weight, hh_bias,
                  re_ih_weight, re_ih_bias, re_hh_weight, re_hh_bias,
                  Qr1, Qr2, x_gru);
@@ -1133,7 +1058,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
 
     /* Sigmoid: de-padded output (remove last pad_len elements) */
     for (int w = 0; w < W; w++) {
-        y[w] = sigmoid_q20_to_q20(x_flat[w]);
+        y[w] = sigmoid_q20_to_q15(x_flat[w]);
     }
 }
 

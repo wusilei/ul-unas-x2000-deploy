@@ -118,12 +118,6 @@ static inline uint16_t clamp_u16(int32_t x) {
     return (uint16_t)x;
 }
 
-static inline int32_t sat_s20(int64_t x) {
-    if (x >  1073741824LL) return  1073741824;
-    if (x < -1073741824LL) return -1073741824;
-    return (int32_t)x;
-}
-
 /* ================================================================
  * LUT function declarations (defined in ulunas_lut.c)
  * ================================================================ */
@@ -131,9 +125,6 @@ uint16_t sigmoid_q20_to_q15(int32_t x_q20);
 int16_t  tanh_q20_to_q15(int32_t x_q20);
 int32_t  log10_q20(int32_t x_q20);
 uint32_t sqrt_q40_to_q20(uint64_t x_q40);
-
-uint32_t sigmoid_q20_to_q20(int32_t x_q20);
-int32_t  tanh_q20_to_q20(int32_t x_q20);
 
 /* ================================================================
  * Model State Structure — all frame-persistent caches
@@ -150,22 +141,22 @@ typedef struct {
     int32_t conv_cache_d2[12 * 2 * 65];
 
     /* cTFA TA GRU hidden state caches (Encoder) */
-    int32_t tfa_cache_e0[24];
-    int32_t tfa_cache_e1[48];
-    int32_t tfa_cache_e2[48];
-    int32_t tfa_cache_e3[64];
-    int32_t tfa_cache_e4[32];
+    int16_t tfa_cache_e0[24];
+    int16_t tfa_cache_e1[48];
+    int16_t tfa_cache_e2[48];
+    int16_t tfa_cache_e3[64];
+    int16_t tfa_cache_e4[32];
 
-    /* cTFA TA GRU hidden state caches (Decoder) -- int32_t Q20 */
-    int32_t tfa_cache_d0[64];
-    int32_t tfa_cache_d1[48];
-    int32_t tfa_cache_d2[48];
-    int32_t tfa_cache_d3[24];
-    int32_t tfa_cache_d4[2];
+    /* cTFA TA GRU hidden state caches (Decoder) */
+    int16_t tfa_cache_d0[64];
+    int16_t tfa_cache_d1[48];
+    int16_t tfa_cache_d2[48];
+    int16_t tfa_cache_d3[24];
+    int16_t tfa_cache_d4[2];
 
-    /* GDPRNN Inter-RNN hidden state caches -- int32_t Q20 */
-    int32_t inter_cache_0[33 * 16];
-    int32_t inter_cache_1[33 * 16];
+    /* GDPRNN Inter-RNN hidden state caches */
+    int16_t inter_cache_0[33 * 16];
+    int16_t inter_cache_1[33 * 16];
 
 } ulunas_state_t;
 
@@ -330,19 +321,6 @@ void bigru_module(const int32_t *x, int T, int nHidden, int in_dim,
                   int Qr1, int Qr2,
                   int16_t *y);
 
-/* Q20 GRU */
-void gru_module_q20(const int32_t *x_t, int nHidden, int in_dim,
-                    int32_t *h_cache,
-                    const int16_t *ih_weight, const int32_t *ih_bias,
-                    const int16_t *hh_weight, const int32_t *hh_bias,
-                    int Qr1, int Qr2, int16_t *y);
-void bigru_module_q20(const int32_t *x, int T, int nHidden, int in_dim,
-                      const int16_t *ih_weight, const int32_t *ih_bias,
-                      const int16_t *hh_weight, const int32_t *hh_bias,
-                      const int16_t *re_ih_weight, const int32_t *re_ih_bias,
-                      const int16_t *re_hh_weight, const int32_t *re_hh_bias,
-                      int Qr1, int Qr2, int16_t *y);
-
 /* --- cTFA Channel-wise Time-Frequency Attention --- */
 
 /**
@@ -352,17 +330,17 @@ void bigru_module_q20(const int32_t *x, int T, int nHidden, int in_dim,
  * h_cache[C_ta_nhid] in Q15 (GRU state, updated)
  */
 void ctfa_ta_module(const int32_t *x, int C, int W, int nHidden,
-                    int32_t *h_cache,
+                    int16_t *h_cache,
                     const int16_t *ih_weight, const int32_t *ih_bias,
                     const int16_t *hh_weight, const int32_t *hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint32_t *y);
+                    uint16_t *y);
 
 /**
  * ctfa_fa_module: Frequency Attention
  * x[C][W] in Q20 → square → mean over C → pad → reshape → BiGRU → FC → reshape → sigmoid
- * Output: y[1][W] in Q20 (attention weights per frequency)
+ * Output: y[1][W] in Q15 (attention weights per frequency)
  */
 void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     int group, int seg, int pad_len,
@@ -372,7 +350,7 @@ void ctfa_fa_module(const int32_t *x, int C, int W, int nHidden,
                     const int16_t *re_hh_weight, const int32_t *re_hh_bias,
                     const int16_t *fc_weight, const int32_t *fc_bias,
                     int Qr1, int Qr2, int fc_Qr,
-                    uint32_t *y);
+                    uint16_t *y);
 
 /* --- Shuffle Operators --- */
 
@@ -431,8 +409,8 @@ void encoder_module(const int32_t *x, ulunas_state_t *st,
 
 /* --- GDPRNN --- */
 void intra_rnn_module(const int32_t *x, int gdprnn_idx, int32_t *y);
-void inter_rnn_module(const int32_t *x, int32_t *h_cache, int gdprnn_idx, int32_t *y);
-void gdprnn_module(const int32_t *x, int32_t *h_cache, int gdprnn_idx, int32_t *y);
+void inter_rnn_module(const int32_t *x, int16_t *h_cache, int gdprnn_idx, int32_t *y);
+void gdprnn_module(const int32_t *x, int16_t *h_cache, int gdprnn_idx, int32_t *y);
 
 /* --- Decoder --- */
 void decoder_layer0_de_xdws0(const int32_t *x, const int32_t *skip, ulunas_state_t *st, int32_t *y);

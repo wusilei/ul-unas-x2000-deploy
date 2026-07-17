@@ -1,0 +1,73 @@
+/* ================================================================
+ * ulunas_config.tcf — DSP/BIOS 5.31.02 Configuration (DM3730)
+ * ================================================================
+ *
+ * 目标芯片: DM3730 C64x+ DSP @ 600MHz, L2 64KB, L1P/L1D 各 32KB
+ *
+ * CCS3.3 无 DM3730 平台 → 用 ti.platforms.generic + C64x+ 设备定义
+ * 所有模块需手动 enable (bios.enableTskManager 等)
+ */
+
+/* ── 平台参数 ──────────────────────────────────────────────── */
+var mem_ext = [
+    {
+        comment: "DDR 64MB @ 0x80000000 (DM3730 shared DDR)",
+        name: "DDR",
+        base: 0x80000000,
+        len:  0x04000000,
+        space: "code/data"
+    }
+];
+
+var device_regs = {
+    l1PMode: "32k",       /* L1P Cache */
+    l1DMode: "32k",       /* L1D Cache */
+    l2Mode:  "32k"        /* 32KB SRAM + 32KB Cache */
+};
+
+utils.loadPlatform("ti.platforms.generic", {
+    clockRate: 600,
+    catalogName: "ti.catalog.c6000",
+    deviceName: "6455",           /* C64x+ (DM3730 同为 C64x+, 无专用定义) */
+    regs: device_regs,
+    mem: mem_ext
+});
+
+/* ── 启用 DSP/BIOS 模块 ───────────────────────────────────── */
+bios.enableTskManager(prog);
+bios.enableMemoryHeaps(prog);
+
+/* IRAM 堆 (BIOS 内部使用) */
+bios.IRAM.createHeap      = true;
+bios.IRAM.enableHeapLabel = true;
+bios.IRAM.heapSize        = 0x1000;              /* 4KB heap */
+
+/* C64x+ MAR: DDR 区域可缓存 */
+bios.GBL.C64PLUSCONFIGURE = 1;
+bios.GBL.C64PLUSMAR128to159 = 0x0000ffff;        /* MAR128-143: DDR cacheable */
+
+/* Timer: 用 Timer0 驱动 BIOS 时钟 (不与 ARM 共享) */
+bios.CLK.TIMERSELECT = "Timer 0";
+bios.CLK.RESETTIMER  = true;
+
+/* ── 音频任务 ──────────────────────────────────────────────── */
+var tskAudio = bios.TSK.create("TSK_Audio");
+tskAudio.fxn          = prog.extern("TSK_Audio");
+tskAudio.priority     = 5;
+tskAudio.stackSize    = 36864;                   /* 36KB */
+
+/* ── 控制任务 ──────────────────────────────────────────────── */
+var tskCtrl = bios.TSK.create("TSK_Ctrl");
+tskCtrl.fxn          = prog.extern("TSK_Ctrl");
+tskCtrl.priority     = 1;
+tskCtrl.stackSize    = 4096;
+
+/* ── 硬件中断 ──────────────────────────────────────────────── */
+bios.HWI.instance("HWI_INT6").fxn = prog.extern("edma_rx_isr");
+bios.HWI.instance("HWI_INT8").fxn = prog.extern("dsp_link_isr");
+
+/* ── 音频帧就绪信号量 ──────────────────────────────────────── */
+bios.SEM.create("AUDIO_READY");
+
+/* ── 触发代码生成 ────────────────────────────────────────── */
+prog.gen();

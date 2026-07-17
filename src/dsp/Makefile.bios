@@ -1,0 +1,49 @@
+# UL-UNAS DM3730 DSP/BIOS Build Makefile
+# ========================================
+# 基于 DSP/BIOS 5.31.02 示例 makefile 模式.
+# 需要先设置 BIOS_INSTALL_DIR 环境变量.
+
+BIOS_INSTALL_DIR = E:/app/CCStudio_v3.3/bios_5_31_02
+COMMON_DIR       = $(BIOS_INSTALL_DIR)/packages/ti/bios/examples/common
+PLATFORMS_ROOT   = $(BIOS_INSTALL_DIR)
+
+include $(COMMON_DIR)/config.mak
+include $(COMMON_DIR)/c6xrules.mak
+
+PROG     = ulunas
+SRCS     = ../dsp_main.c ../dsp_mcbsp.c ../dsp_link.c \
+           ../../model/ulunas_fp.c ../../model/ulunas_modules.c \
+           ../../model/ulunas_infer.c ../../model/ulunas_lut.c \
+           ../../model/ulunas_matlab_weights.c \
+           ../../pipeline/ulunas_nr.c ../../shared/agc.c
+OBJS     = dsp_main.obj dsp_mcbsp.obj dsp_link.obj \
+           ulunas_fp.obj ulunas_modules.obj ulunas_infer.obj \
+           ulunas_lut.obj ulunas_matlab_weights.obj \
+           ulunas_nr.obj agc.obj
+
+TCONFOPTS = -Dconfig.importPath="$(PLATFORMS_ROOT)/packages;$(COMMON_DIR);."
+TCIS      =
+
+CC6xFLAGS = -mv64plus -O3 -pr -fg -dCHIP_DM642 \
+            -D__STDC_LIMIT_MACROS -D__STDC_CONSTANT_MACROS \
+            -I.. -I../../model -I../../pipeline -I../../shared \
+            -I$(BIOS_ROOT)/include -I$(C6X_CODEGEN_ROOT)/include
+AS6xFLAGS = -mv64plus
+LD6xFLAGS = -m"$(PROG).map" -c -x
+
+all: $(PROG).out
+
+$(PROG).out: $(PROG)cfg.obj $(OBJS)
+	$(LD6x) $(LD6xOPTS) $(LD6xFLAGS) -o $@ $(PROG)cfg.obj $(OBJS) \
+	    $(BIOS_ROOT)/lib/bios64plus.a64P $(RTDX_ROOT)/lib/c6000/rtdx.lib \
+	    $(C6X_CODEGEN_ROOT)/lib/rts64plus.lib
+
+$(PROG)cfg.obj: $(PROG)cfg.s64P
+	$(AS6x) $(AS6xOPTS) $(AS6xFLAGS) $<
+
+# Trigger tconf via gmake pattern rule
+$(PROG)cfg.s64P $(PROG)cfg.h $(PROG)cfg_c.c $(PROG)cfg.cmd: $(PROG)_config.tcf
+	$(TCONF) $(TCONFOPTS) $<
+
+clean:
+	rm -f *.obj *.out *.map *.s64P *.h64P *cfg.h *cfg_c.c *cfg.cmd
